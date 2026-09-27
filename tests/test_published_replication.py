@@ -11,6 +11,7 @@ from voynich_lab.published_replication import (
     automatic_replication_metrics,
     collapse_composites,
     entropy_corpus_tokens,
+    erased_space_crossing_rates,
     paper_character_conditional_entropy,
     paper_order_metrics,
     strict_space_records,
@@ -29,6 +30,12 @@ RAW = """#=IVTFF Eva- 2.0
 <f2r> <! $Q=B $P=A $I=T $L=B $H=2 >
 <f2r.1,@P0;U> chedy.qokeedy.daiin
 <f2r.2,@P0;U> shol,shory.qokedy
+"""
+
+CROSSING_RAW = """#=IVTFF Eva- 2.0
+<f1r> <! $Q=A $P=A $I=H $L=A $H=1 >
+<f1r.1,@P0;U> ab.cd
+<f1r.2,@P0;U> ab.cd
 """
 
 
@@ -167,7 +174,21 @@ def test_token_succession_matches_scale_transition_reference():
     )
 
 
-def test_automatic_replication_emits_only_unambiguous_targets():
+def test_erased_space_crossing_tracks_hidden_boundaries():
+    zero = erased_space_crossing_rates(CROSSING_RAW, merges=0)
+    assert zero["certain"] == {"crossed": 0, "total": 2, "rate": 0.0}
+
+    learned = erased_space_crossing_rates(CROSSING_RAW, merges=2)
+    assert learned["merges_learned"] == 2
+    assert learned["certain"] == {"crossed": 2, "total": 2, "rate": 1.0}
+    assert learned["all_positions"] == {
+        "crossed": 4,
+        "total": 6,
+        "rate": 2 / 3,
+    }
+
+
+def test_automatic_replication_emits_all_unambiguous_targets():
     observed, diagnostics = automatic_replication_metrics(
         RAW,
         shuffles=5,
@@ -178,8 +199,9 @@ def test_automatic_replication_emits_only_unambiguous_targets():
     assert "char_conditional_entropy_bits" in observed
     assert "cross_boundary_edge_mi_bits" in observed
     assert "token_succession_entropy_fraction" in observed
+    assert "certain_separator_unit_crossing_rate" in observed
     assert "bpe_crossfit_gap_0_bits" in observed
     assert "bpe_crossfit_gap_2_bits" in observed
     assert "bpe_crossfit_selected_merges" in observed
-    assert "certain_separator_unit_crossing_rate" not in observed
+    assert diagnostics["erased_space_crossing"]["merges"] == 64
     assert diagnostics["unit_scale_quires"] == ["A", "B"]
