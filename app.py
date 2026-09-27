@@ -247,6 +247,23 @@ def run_automatic_replication_ui(raw_text: str, tolerance: float):
         raise gr.Error("Automatic literature reproduction requires the original IVTFF transcription.")
     observed, diagnostics = automatic_replication_metrics(raw_text, shuffles=100)
     rows = compare_to_targets(observed, tolerance=float(tolerance))
+    crossing = diagnostics["erased_space_crossing"]
+    crossing_rows = []
+    for key, label in (
+        ("certain", "ZL certain separators"),
+        ("uncertain", "ZL uncertain separators"),
+        ("all_positions", "all eligible intra-line positions"),
+    ):
+        values = crossing[key]
+        crossing_rows.append(
+            {
+                "boundary_pool": label,
+                "bpe_merges": crossing["merges"],
+                "crossed": values["crossed"],
+                "total": values["total"],
+                "crossing_rate": values["rate"],
+            }
+        )
     note = {
         "method": "Rozanova & Temerev public reproduction conventions",
         "order_shuffles": 100,
@@ -256,7 +273,12 @@ def run_automatic_replication_ui(raw_text: str, tolerance: float):
         "auto_scored_targets": sorted(observed),
         "diagnostics": diagnostics,
     }
-    return json.dumps(observed, indent=2, sort_keys=True), json.dumps(note, indent=2, sort_keys=True), pd.DataFrame(rows)
+    return (
+        json.dumps(observed, indent=2, sort_keys=True),
+        json.dumps(note, indent=2, sort_keys=True),
+        pd.DataFrame(rows),
+        pd.DataFrame(crossing_rows),
+    )
 
 
 def push_ui(target: str):
@@ -374,12 +396,13 @@ with gr.Blocks(title=APP_TITLE) as demo:
         tolerance = gr.Slider(0.01, 0.50, value=0.10, step=0.01, label="Relative tolerance for point targets")
         auto_replication_btn = gr.Button("Run automatic Rozanova/Temerev replication", variant="primary")
         auto_observed = gr.Code(label="Automatically computed observed metrics", language="json")
-        auto_diagnostics = gr.Code(label="Method diagnostics", language="json")
         auto_replication_table = gr.Dataframe(label="Automatic replication gate", interactive=False)
+        auto_crossing_table = gr.Dataframe(label="64-merge erased-space boundary crossing", interactive=False)
+        auto_diagnostics = gr.Code(label="Full method diagnostics", language="json")
         auto_replication_btn.click(
             run_automatic_replication_ui,
             [raw_state, tolerance],
-            [auto_observed, auto_diagnostics, auto_replication_table],
+            [auto_observed, auto_diagnostics, auto_replication_table, auto_crossing_table],
         )
         gr.Markdown("#### Manual target comparison\nUse this for independently computed metrics or literature targets not implemented by the automatic Rozanova/Temerev path, including the separate Parisel statistics.")
         observed_json = gr.Textbox(
