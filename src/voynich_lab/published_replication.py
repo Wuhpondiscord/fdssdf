@@ -13,6 +13,7 @@ from .segmentation import cross_fit_bpe_scale_curve
 # different corpus-cleaning contracts.
 HEADER_RE = re.compile(r"^<([^>.]+)>\s+<!([^\n]+)>", re.M)
 LOCUS_RE = re.compile(r"^<([^>.]+)\.(\d+),([@+*=~&])([A-Za-z])[^>]*>\s*(.*)$")
+ENTROPY_LOCUS_RE = re.compile(r"^<(f[0-9rv]+[0-9]*)\.(\d+),([@+*=~])([A-Za-z])[^>]*>\s*(.*)$")
 TOKEN_RE = re.compile(r"[a-z]+")
 BAD_UNIT = set("?*<>{}[]()|@")
 BAD_ENTROPY = set("?*<>{}[]()|")
@@ -75,7 +76,10 @@ def entropy_corpus_tokens(raw_text: str) -> list[str]:
     path. Boundaries are removed only when the final symbol sequence is built.
     """
     tokens: list[str] = []
-    for match in _paragraph_loci(raw_text):
+    for raw in (raw_text or "").splitlines():
+        match = ENTROPY_LOCUS_RE.match(raw)
+        if not match or match.group(4) != "P":
+            continue
         body = _strip_common_markup(match.group(5)).strip()
         tokens.extend(
             word
