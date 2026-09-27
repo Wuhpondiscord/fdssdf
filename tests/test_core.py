@@ -218,10 +218,11 @@ def test_classifier_uses_multiple_grouped_splits():
 
 def test_replication_targets_are_verified_and_corrected():
     assert TARGETS["char_conditional_entropy_bits"].value == 2.69
+    assert TARGETS["token_succession_entropy_fraction"].value == 0.0079
     assert TARGETS["cross_boundary_edge_mi_bits"].value == 0.197
     assert TARGETS["certain_separator_unit_crossing_rate"].value == 0.025
     assert "uncertain_separator_crossing_rate" not in TARGETS
-    rows = compare_to_targets({"bpe_crossfit_selected_merges": 32, "token_succession_entropy_fraction": 0.009})
+    rows = compare_to_targets({"bpe_crossfit_selected_merges": 32, "token_succession_entropy_fraction": 0.0079})
     assert all(r["reproduced"] is True for r in rows)
 
 
