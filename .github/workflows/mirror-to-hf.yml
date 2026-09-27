@@ -1,0 +1,37 @@
+name: Mirror to Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-to-hugging-face
+  cancel-in-progress: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HF_SPACE_REPO: wuhp/ghtest
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install Hub client
+        run: python -m pip install --upgrade huggingface_hub
+      - name: Verify secret exists
+        shell: bash
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN GitHub Actions secret is missing."
+            exit 1
+          fi
+      - name: Mirror application snapshot
+        run: python scripts/push_to_hf.py
