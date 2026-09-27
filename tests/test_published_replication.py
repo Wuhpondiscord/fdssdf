@@ -1,4 +1,7 @@
+from collections import Counter
+from math import log2
 from pathlib import Path
+import random
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +30,60 @@ RAW = """#=IVTFF Eva- 2.0
 <f2r.1,@P0;U> chedy.qokeedy.daiin
 <f2r.2,@P0;U> shol,shory.qokedy
 """
+
+
+def _reference_token_mi(lines: list[list[str]]) -> tuple[float, float]:
+    unigram = Counter(token for line in lines for token in line)
+    previous = Counter()
+    following = Counter()
+    bigram = Counter()
+    for line in lines:
+        for left, right in zip(line, line[1:]):
+            previous[left] += 1
+            following[right] += 1
+            bigram[(left, right)] += 1
+    n = sum(unigram.values())
+    n_pairs = sum(bigram.values())
+    entropy = -sum(count / n * log2(count / n) for count in unigram.values())
+    entropy_previous = -sum(
+        count / n_pairs * log2(count / n_pairs) for count in previous.values()
+    )
+    entropy_following = -sum(
+        count / n_pairs * log2(count / n_pairs) for count in following.values()
+    )
+    entropy_pair = -sum(
+        count / n_pairs * log2(count / n_pairs) for count in bigram.values()
+    )
+    return entropy_previous + entropy_following - entropy_pair, entropy
+
+
+def _reference_token_order_share(
+    raw_text: str,
+    *,
+    shuffles: int,
+    seed: int,
+    cap: int = 2000,
+) -> float:
+    lines = [
+        [collapse_composites(token) for token in record["tokens"]]
+        for record in strict_space_records(raw_text)
+    ]
+    frequency = Counter(token for line in lines for token in line)
+    retained = {token for token, _ in frequency.most_common(cap)}
+    recoded = [
+        [token if token in retained else "<other>" for token in line]
+        for line in lines
+        if len(line) >= 2
+    ]
+    observed, entropy = _reference_token_mi(recoded)
+    rng = random.Random(seed)
+    null = []
+    for _ in range(shuffles):
+        permuted = [list(line) for line in recoded]
+        for line in permuted:
+            rng.shuffle(line)
+        null.append(_reference_token_mi(permuted)[0])
+    return (observed - sum(null) / len(null)) / entropy
 
 
 def test_composite_collapse_matches_public_substitution_order():
@@ -73,12 +130,41 @@ def test_unit_scale_text_preserves_manuscript_lines_inside_each_quire():
 def test_paper_entropy_and_order_metrics_are_finite_and_deterministic():
     h2 = paper_character_conditional_entropy(RAW)
     assert h2 == h2 and h2 >= 0
-    first = paper_order_metrics(RAW, shuffles=5, seed=17)
-    second = paper_order_metrics(RAW, shuffles=5, seed=17)
+    first = paper_order_metrics(RAW, shuffles=5, seed=17, token_seed=19)
+    second = paper_order_metrics(RAW, shuffles=5, seed=17, token_seed=19)
     assert first == second
     assert first["cross_boundary_edge_mi_bits"] == first["cross_boundary_edge_mi_bits"]
     assert first["token_succession_entropy_fraction"] == first["token_succession_entropy_fraction"]
     assert first["order_lines"] == len(strict_space_records(RAW))
+
+
+def test_token_succession_matches_scale_transition_reference():
+    shuffles = 7
+    token_seed = 20260810
+    expected = _reference_token_order_share(
+        RAW,
+        shuffles=shuffles,
+        seed=token_seed,
+    )
+    result = paper_order_metrics(
+        RAW,
+        shuffles=shuffles,
+        seed=12345,
+        token_seed=token_seed,
+    )
+    assert abs(result["token_succession_entropy_fraction"] - expected) < 1e-12
+
+    # Changing only the edge-MI seed must not alter the token-order statistic.
+    other_edge_seed = paper_order_metrics(
+        RAW,
+        shuffles=shuffles,
+        seed=54321,
+        token_seed=token_seed,
+    )
+    assert (
+        other_edge_seed["token_succession_entropy_fraction"]
+        == result["token_succession_entropy_fraction"]
+    )
 
 
 def test_automatic_replication_emits_only_unambiguous_targets():
@@ -86,6 +172,7 @@ def test_automatic_replication_emits_only_unambiguous_targets():
         RAW,
         shuffles=5,
         order_seed=23,
+        token_order_seed=29,
         bpe_checkpoints=(0, 2),
     )
     assert "char_conditional_entropy_bits" in observed
