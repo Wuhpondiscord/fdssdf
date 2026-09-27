@@ -20,13 +20,12 @@ TARGETS: dict[str, Target] = {
         note="Composite-collapsed EVA; first-order conditional entropy after P-locus cleaning and erasing token/line boundaries from the character sequence. Decomposed EVA is reported separately at 2.32 bits.",
     ),
     "token_succession_entropy_fraction": Target(
-        "token_succession_entropy_fraction", 0.01, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        comparison="upper_bound",
-        note="Shuffle-corrected adjacent capped-token MI divided by the full capped-token marginal entropy H(T), using a 2,000-type cap and within-line shuffles. The paper reports under 1%; 0.01 is retained here as an upper bound rather than a point target.",
+        "token_succession_entropy_fraction", 0.0079, "Rozanova & Temerev 2026, arXiv:2608.17096",
+        note="Table 7 reports 0.79%: shuffle-corrected adjacent capped-token MI divided by full capped-token marginal entropy H(T), using a 2,000-type cap and 100 within-line shuffles.",
     ),
     "cross_boundary_edge_mi_bits": Target(
         "cross_boundary_edge_mi_bits", 0.197, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        note="Shuffle-corrected last-glyph(token t) to first-glyph(token t+1) MI on composite-collapsed observed-space lines; 100 within-line shuffles in the public reproduction.",
+        note="Table 7 shuffle-corrected last-glyph(token t) to first-glyph(token t+1) MI on composite-collapsed observed-space lines; 100 within-line shuffles in the public reproduction.",
     ),
     "bpe_crossfit_gap_0_bits": Target("bpe_crossfit_gap_0_bits", 1.686, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap H1-H2, 0 within-token BPE merges."),
     "bpe_crossfit_gap_16_bits": Target("bpe_crossfit_gap_16_bits", 1.423, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap H1-H2, 16 within-token BPE merges."),
@@ -38,7 +37,7 @@ TARGETS: dict[str, Target] = {
     ),
     "certain_separator_unit_crossing_rate": Target(
         "certain_separator_unit_crossing_rate", 0.025, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        note="Share of hidden certain/conventional token boundaries crossed by learned units after spaces are erased; reported as 2.5% for Voynichese in Table 7. The public space-sensitivity driver reports 32/64/128-merge crossing rates, so this target is not auto-scored until the table's specific checkpoint is pinned down.",
+        note="Table 8: at 64 BPE merges learned on space-erased line strings, 661 of 26,447 hidden ZL-certain separator positions are crossed (2.5%).",
     ),
     "end_to_start_flow_proportion": Target(
         "end_to_start_flow_proportion", 0.806, "Parisel 2026, arXiv:2604.19762",
