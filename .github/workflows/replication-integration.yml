@@ -1,0 +1,92 @@
+name: Published Replication Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/published_replication.py"
+      - "src/voynich_lab/segmentation.py"
+      - "src/voynich_lab/replication_targets.py"
+      - "tests/test_published_replication.py"
+      - ".github/workflows/replication-integration.yml"
+  pull_request:
+    paths:
+      - "src/voynich_lab/published_replication.py"
+      - "src/voynich_lab/segmentation.py"
+      - "src/voynich_lab/replication_targets.py"
+      - "tests/test_published_replication.py"
+      - ".github/workflows/replication-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce-paper-headlines:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install numeric dependency
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy>=1.26,<3"
+      - name: Download pinned ZL3b transcription
+        run: |
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/lrozanova/voynich-units/956a7c4fc39981f4d116fa3f4edfccce6d065571/voynich_decipherment_repro_bundle/voynich_calibration_sources/ZL3b.txt" \
+            --output /tmp/ZL3b.txt
+          test -s /tmp/ZL3b.txt
+      - name: Reproduce published headline statistics
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from voynich_lab.published_replication import automatic_replication_metrics
+
+          raw = Path("/tmp/ZL3b.txt").read_text(encoding="utf-8", errors="replace")
+          observed, diagnostics = automatic_replication_metrics(raw, shuffles=100)
+
+          print("OBSERVED")
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          crossing = diagnostics["erased_space_crossing"]
+          print("CROSSING")
+          print(json.dumps(crossing, indent=2, sort_keys=True))
+          print("BPE")
+          print(json.dumps(diagnostics["bpe_rows"], indent=2, sort_keys=True))
+
+          # Paper values are printed at finite precision, so headline point
+          # comparisons allow only the rounding implied by the publication.
+          assert abs(observed["char_conditional_entropy_bits"] - 2.69) <= 0.015
+          assert abs(observed["token_succession_entropy_fraction"] - 0.0079) <= 0.0005
+          assert abs(observed["cross_boundary_edge_mi_bits"] - 0.197) <= 0.003
+
+          # Table 8 gives exact counts at 64 erased-space BPE merges.
+          assert crossing["merges"] == 64
+          assert crossing["certain"]["crossed"] == 661
+          assert crossing["certain"]["total"] == 26447
+          assert crossing["uncertain"]["crossed"] == 477
+          assert crossing["uncertain"]["total"] == 2350
+          assert crossing["all_positions"]["crossed"] == 97402
+          assert crossing["all_positions"]["total"] == 162330
+
+          expected_gaps = {
+              0: 1.686,
+              16: 1.423,
+              32: 1.379,
+              64: 1.490,
+          }
+          rows = {int(row["merges"]): row for row in diagnostics["bpe_rows"]}
+          assert set(rows) == set(expected_gaps)
+          for merges, expected in expected_gaps.items():
+              got = rows[merges]["glyph_weighted_dependence_gap_bits"]
+              assert abs(got - expected) <= 0.005, (merges, got, expected)
+          assert diagnostics["bpe_selected_merges"] == 32
+          PY
