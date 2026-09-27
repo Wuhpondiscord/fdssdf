@@ -11,7 +11,17 @@ SPACE_RE = re.compile(r"\s+")
 
 
 def normalize_text(text: str) -> str:
+    """Normalize an analysis stream and automatically strip IVTFF metadata."""
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if "<" in text and ">" in text:
+        try:
+            from .ivtff import is_ivtff, parse_ivtff
+            if is_ivtff(text):
+                doc = parse_ivtff(text)
+                if doc.lines:
+                    text = doc.to_analysis_text(uncertain_policy="split")
+        except (ImportError, ValueError):
+            pass
     lines = [SPACE_RE.sub(" ", line.strip()) for line in text.split("\n")]
     return "\n".join(line for line in lines if line)
 

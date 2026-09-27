@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from math import log2
 
 from .metrics import glyph_stream
 
@@ -23,11 +24,6 @@ def _merge_pair(symbols: list[str], pair: tuple[str, str], merged: str) -> list[
 
 
 def discover_bpe_units(text: str, merges: int = 32) -> tuple[list[str], list[dict[str, object]]]:
-    """In-sample BPE. Kept for quick exploration, but note: learning and
-    evaluating merges on the same text can manufacture apparent structure.
-    Use learn_bpe_merges / apply_bpe_merges for any result you intend to
-    report, so the held-out discipline the 2026 unit-discovery paper used
-    is actually followed rather than merely mentioned in the README."""
     symbols = list(glyph_stream(text))
     history: list[dict[str, object]] = []
     for step in range(max(0, int(merges))):
@@ -44,9 +40,6 @@ def discover_bpe_units(text: str, merges: int = 32) -> tuple[list[str], list[dic
 
 
 def learn_bpe_merges(train_text: str, merges: int = 64) -> list[tuple[str, str]]:
-    """Learn an ordered merge table on training data only. Returns the merge
-    sequence, not the segmented training text, so it can be re-applied
-    unchanged to held-out data."""
     symbols = list(glyph_stream(train_text))
     merge_table: list[tuple[str, str]] = []
     for _ in range(max(0, int(merges))):
@@ -62,27 +55,40 @@ def learn_bpe_merges(train_text: str, merges: int = 64) -> list[tuple[str, str]]
 
 
 def apply_bpe_merges(text: str, merge_table: list[tuple[str, str]]) -> list[str]:
-    """Apply a merge table learned elsewhere, in the order it was learned.
-    This is the operation that must be run on held-out quires."""
     symbols = list(glyph_stream(text))
     for pair in merge_table:
         symbols = _merge_pair(symbols, pair, "".join(pair))
     return symbols
 
 
-def cross_fit_bpe_by_quire(
-    text_by_quire: dict[str, str], merges: int = 64
-) -> dict[str, dict[str, object]]:
-    """Leave-one-quire-out cross-fitting: for each held-out quire, learn
-    merges on every other quire and segment the held-out quire with that
-    frozen merge table. Returns per-quire held-out unit counts/lengths so
-    unit-scale stability across folds can be assessed directly, mirroring
-    the review's "held-out description length / boundary stability /
-    cross-quire stability" comparison table.
-    """
+def _entropy_units(units: list[str]) -> float:
+    if not units:
+        return float("nan")
+    counts = Counter(units)
+    n = len(units)
+    return -sum((c / n) * log2(c / n) for c in counts.values())
+
+
+def unit_dependence_gap(units: list[str]) -> float:
+    """Adjacent-unit dependence D = H(U[t+1]) - H(U[t+1]|U[t]), bits."""
+    if len(units) < 2:
+        return float("nan")
+    left = units[:-1]
+    right = units[1:]
+    n = len(left)
+    left_counts = Counter(left)
+    pair_counts = Counter(zip(left, right))
+    h_cond = 0.0
+    for (a, _b), c_ab in pair_counts.items():
+        p_ab = c_ab / n
+        p_b_given_a = c_ab / left_counts[a]
+        h_cond -= p_ab * log2(p_b_given_a)
+    return _entropy_units(right) - h_cond
+
+
+def cross_fit_bpe_by_quire(text_by_quire: dict[str, str], merges: int = 64) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
-    quires = list(text_by_quire)
-    for held_out in quires:
+    for held_out in text_by_quire:
         train_text = "\n".join(t for q, t in text_by_quire.items() if q != held_out)
         merge_table = learn_bpe_merges(train_text, merges=merges)
         segmented = apply_bpe_merges(text_by_quire[held_out], merge_table)
@@ -91,5 +97,43 @@ def cross_fit_bpe_by_quire(
             "held_out_unit_count": len(segmented),
             "held_out_unit_types": len(set(segmented)),
             "mean_unit_length": (sum(len(u) for u in segmented) / len(segmented)) if segmented else float("nan"),
+            "dependence_gap_bits": unit_dependence_gap(segmented),
         }
     return results
+
+
+def cross_fit_bpe_scale_curve(
+    text_by_quire: dict[str, str], checkpoints: tuple[int, ...] = (0, 16, 32, 64)
+) -> tuple[list[dict[str, object]], int | None]:
+    """Leave-one-quire-out BPE scale curve with glyph-weighted aggregation."""
+    if len(text_by_quire) < 2:
+        return [], None
+    checkpoints = tuple(sorted({max(0, int(c)) for c in checkpoints}))
+    max_merges = max(checkpoints, default=0)
+    fold_tables: dict[str, list[tuple[str, str]]] = {}
+    for held_out in text_by_quire:
+        train = "\n".join(t for q, t in text_by_quire.items() if q != held_out)
+        fold_tables[held_out] = learn_bpe_merges(train, merges=max_merges)
+
+    rows: list[dict[str, object]] = []
+    for checkpoint in checkpoints:
+        weighted_sum = 0.0
+        total_weight = 0
+        fold_values: dict[str, float] = {}
+        for held_out, held_text in text_by_quire.items():
+            units = apply_bpe_merges(held_text, fold_tables[held_out][:checkpoint])
+            gap = unit_dependence_gap(units)
+            fold_values[held_out] = gap
+            weight = len(glyph_stream(held_text))
+            if gap == gap and weight > 0:
+                weighted_sum += gap * weight
+                total_weight += weight
+        rows.append({
+            "merges": checkpoint,
+            "glyph_weighted_dependence_gap_bits": weighted_sum / total_weight if total_weight else float("nan"),
+            "folds": len(fold_values),
+            "fold_values": fold_values,
+        })
+    finite = [r for r in rows if r["glyph_weighted_dependence_gap_bits"] == r["glyph_weighted_dependence_gap_bits"]]
+    selected = min(finite, key=lambda r: r["glyph_weighted_dependence_gap_bits"])["merges"] if finite else None
+    return rows, int(selected) if selected is not None else None

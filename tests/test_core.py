@@ -5,37 +5,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from voynich_lab.discriminator import classifier_two_sample_test
-from voynich_lab.ivtff import parse_ivtff
-from voynich_lab.longrange import block_entropy, dfa_fluctuation, lagged_mutual_information
-from voynich_lab.metrics import compute_metrics
-from voynich_lab.replication_targets import compare_to_targets
+from voynich_lab.ivtff import is_ivtff, parse_ivtff
+from voynich_lab.longrange import block_entropy, dfa_fluctuation, lagged_mutual_information, lagged_mi_with_shuffle_baseline
+from voynich_lab.metrics import compute_metrics, glyph_stream, normalize_text
+from voynich_lab.replication_targets import TARGETS, compare_to_targets
 from voynich_lab.scorecard import run_scorecard
-from voynich_lab.segmentation import (
-    apply_bpe_merges,
-    cross_fit_bpe_by_quire,
-    discover_bpe_units,
-    learn_bpe_merges,
-)
-from voynich_lab.surrogates import (
-    block_shuffle_surrogate,
-    iid_glyph_surrogate,
-    markov1_surrogate,
-    markov_k_surrogate,
-    position_conditioned_markov_surrogate,
-)
+from voynich_lab.segmentation import apply_bpe_merges, cross_fit_bpe_by_quire, cross_fit_bpe_scale_curve, discover_bpe_units, learn_bpe_merges
+from voynich_lab.surrogates import block_shuffle_surrogate, iid_glyph_surrogate, markov1_surrogate, markov_k_surrogate, position_conditioned_markov_surrogate
 
 SAMPLE = "qokeedy qokedy\nchedy qokeedy"
-
-# A larger synthetic sample so entropy/long-range/scorecard tests have
-# enough symbols to be numerically meaningful, not just non-crashing.
-LONG_SAMPLE = " ".join(["qokeedy", "qokedy", "chedy", "shedy", "daiin", "otedy"] * 40)
-
-IVTFF_SNIPPET = """# comment line, should be dropped
+LONG_SAMPLE = " ".join(["qokeedy", "qokedy", "chedy", "shedy", "daiin", "otedy"] * 50)
+IVTFF_SNIPPET = """#=IVTFF Eva- 2.0
+<f1r> <! $Q=A $P=A $I=H $L=A $H=1 >
 <f1r.1,@P0;U> fachys.ykal.ar,ataiin.shol
 <f1r.2,@P0;U> shory.cth[e:o]res.y.k[a:o]l
 <f1r.3,@P0;U> qokedy.qokeedy
+<f2r> <! $Q=B $P=A $I=T $L=B $H=2 >
 <f2r.1,@P0;U> chedy.qokeedy.daiin
 """
+
+
+def _whitespace_mask(text: str):
+    return [ch if ch.isspace() else "X" for ch in normalize_text(text)]
 
 
 def test_metrics_basic():
@@ -45,137 +36,161 @@ def test_metrics_basic():
     assert m["conventional_token_count"] == 4
 
 
-def test_surrogate_lengths():
-    raw_len = len("".join(SAMPLE.split()))
-    assert len(iid_glyph_surrogate(SAMPLE)) == raw_len
-    assert len(markov1_surrogate(SAMPLE)) == raw_len
+def test_surrogate_lengths_and_layout():
+    raw_len = len(glyph_stream(SAMPLE))
+    for fn in (iid_glyph_surrogate, markov1_surrogate):
+        out = fn(SAMPLE, seed=1)
+        assert len(glyph_stream(out)) == raw_len
+        assert _whitespace_mask(out) == _whitespace_mask(SAMPLE)
 
 
 def test_bpe_reduces_or_preserves_length():
     units, history = discover_bpe_units(SAMPLE, 8)
-    assert len(units) <= len("".join(SAMPLE.split()))
+    assert len(units) <= len(glyph_stream(SAMPLE))
     assert len(history) <= 8
 
 
-# ---- new null-ladder surrogates ------------------------------------------
+def test_markov_k_surrogate_matches_length_and_is_deterministic():
+    a = markov_k_surrogate(SAMPLE, order=5, seed=7)
+    b = markov_k_surrogate(SAMPLE, order=5, seed=7)
+    assert a == b
+    assert len(glyph_stream(a)) == len(glyph_stream(SAMPLE))
+    assert _whitespace_mask(a) == _whitespace_mask(SAMPLE)
 
 
-def test_markov_k_surrogate_matches_length():
-    stream_len = len("".join(SAMPLE.split()))
-    out = markov_k_surrogate(SAMPLE, order=3, seed=1)
-    assert len(out) == stream_len
-
-
-def test_block_shuffle_preserves_multiset():
+def test_block_shuffle_preserves_multiset_and_layout():
     out = block_shuffle_surrogate(LONG_SAMPLE, block_size=3, seed=2)
-    stream = "".join(LONG_SAMPLE.split())
-    assert sorted(out) == sorted(stream)  # shuffling blocks preserves the glyph multiset
+    assert sorted(glyph_stream(out)) == sorted(glyph_stream(LONG_SAMPLE))
+    assert _whitespace_mask(out) == _whitespace_mask(LONG_SAMPLE)
 
 
-def test_position_conditioned_markov_runs():
+def test_position_conditioned_markov_runs_and_preserves_layout():
     out = position_conditioned_markov_surrogate(LONG_SAMPLE, n_bins=5, seed=3)
     assert len(out) > 0
-
-
-# ---- IVTFF parsing --------------------------------------------------------
+    assert _whitespace_mask(out) == _whitespace_mask(LONG_SAMPLE)
 
 
 def test_ivtff_parses_locus_and_folio():
     doc = parse_ivtff(IVTFF_SNIPPET)
+    assert is_ivtff(IVTFF_SNIPPET)
     assert len(doc.lines) == 4
     assert doc.lines[0].folio == "f1r"
     assert doc.lines[-1].folio == "f2r"
 
 
+def test_ivtff_page_metadata_propagates_to_loci():
+    doc = parse_ivtff(IVTFF_SNIPPET)
+    assert doc.quires_present() == ["A", "B"]
+    assert doc.lines[0].quire == "A"
+    assert doc.lines[0].currier_language == "A"
+    assert doc.lines[-1].quire == "B"
+    assert doc.lines[-1].hand == "2"
+    assert doc.lines[-1].illustration_type == "T"
+
+
 def test_ivtff_separator_certainty():
     doc = parse_ivtff(IVTFF_SNIPPET)
-    # line 1: fachys.ykal.ar,ataiin.shol -> 4 separators: certain, certain, uncertain, certain
-    seps = doc.lines[0].separators
-    assert seps == ["certain", "certain", "uncertain", "certain"]
+    assert doc.lines[0].separators == ["certain", "certain", "uncertain", "certain"]
 
 
-def test_ivtff_alternate_resolves_to_primary_reading():
+def test_ivtff_alternates_are_token_local_and_primary_resolves():
     doc = parse_ivtff(IVTFF_SNIPPET)
-    tokens = [t.text for t in doc.lines[1].tokens]
-    assert "ctheres" in tokens  # cth[e:o]res -> "cth" + "e" + "res" (first option)
-    assert "kal" in tokens  # k[a:o]l -> "k" + "a" + "l" (first option)
+    row = doc.lines[1].tokens
+    flags = {t.text: t.had_alternates for t in row}
+    assert flags["ctheres"] is True and flags["kal"] is True
+    assert flags["shory"] is False and flags["y"] is False
 
 
-def test_ivtff_conventional_tokens_flat_list():
+def test_ivtff_analysis_stream_excludes_markup():
+    clean = normalize_text(IVTFF_SNIPPET)
+    assert "$Q" not in clean and "<f1r" not in clean and "@P0" not in clean
+    assert "fachys ykal ar ataiin shol" in clean
+    assert compute_metrics(IVTFF_SNIPPET)["glyph_count"] == len(glyph_stream(clean))
+
+
+def test_ivtff_uncertain_merge_policy_changes_boundary_only():
     doc = parse_ivtff(IVTFF_SNIPPET)
-    toks = doc.conventional_tokens()
-    assert "qokedy" in toks and "qokeedy" in toks
-
-
-# ---- long-range statistics -------------------------------------------------
+    split = doc.to_analysis_text("split")
+    merged = doc.to_analysis_text("merge")
+    assert "ar ataiin" in split
+    assert "arataiin" in merged
+    assert glyph_stream(split) == glyph_stream(merged)
 
 
 def test_lagged_mutual_information_is_finite_and_nonnegative():
-    mi = lagged_mutual_information("".join(LONG_SAMPLE.split()), max_lag=5)
+    mi = lagged_mutual_information(glyph_stream(LONG_SAMPLE), max_lag=5)
     assert len(mi) == 5
     for v in mi.values():
-        assert v == v  # not NaN
-        assert v >= -1e-9  # MI should not be meaningfully negative
+        assert v == v and v >= -1e-9
 
 
-def test_block_entropy_monotone_keys():
-    be = block_entropy("".join(LONG_SAMPLE.split()), block_sizes=(1, 2, 3))
+def test_lagged_mi_reports_shuffle_bias_baseline():
+    rows = lagged_mi_with_shuffle_baseline(LONG_SAMPLE, max_lag=4, n_permutations=5, seed=1)
+    assert len(rows) == 4
+    assert all("excess_mi_bits" in r and "shuffle_mean_bits" in r for r in rows)
+
+
+def test_block_entropy_keys():
+    be = block_entropy(glyph_stream(LONG_SAMPLE), block_sizes=(1, 2, 3))
     assert set(be) == {1, 2, 3}
 
 
 def test_dfa_fluctuation_returns_alpha():
     fluct, alpha = dfa_fluctuation(LONG_SAMPLE, box_sizes=(4, 8, 16))
     assert isinstance(fluct, dict)
-    # alpha may be NaN on tiny inputs; just check the call doesn't crash
-    # and returns a float type.
     assert isinstance(alpha, float)
 
 
-# ---- cross-fit BPE ----------------------------------------------------------
-
-
 def test_learn_and_apply_bpe_merges_no_leakage():
-    train_text = LONG_SAMPLE
-    held_out_text = "qokeedy chedy qokedy"
-    merge_table = learn_bpe_merges(train_text, merges=10)
-    segmented = apply_bpe_merges(held_out_text, merge_table)
-    assert len(segmented) <= len("".join(held_out_text.split()))
+    merge_table = learn_bpe_merges(LONG_SAMPLE, merges=10)
+    held_out = "qokeedy chedy qokedy"
+    segmented = apply_bpe_merges(held_out, merge_table)
+    assert len(segmented) <= len(glyph_stream(held_out))
 
 
 def test_cross_fit_bpe_by_quire_runs_per_quire():
-    text_by_quire = {"Q1": LONG_SAMPLE, "Q2": "chedy qokeedy daiin shedy" * 10}
+    text_by_quire = {"Q1": LONG_SAMPLE, "Q2": ("chedy qokeedy daiin shedy " * 20)}
     results = cross_fit_bpe_by_quire(text_by_quire, merges=8)
     assert set(results) == {"Q1", "Q2"}
-    for r in results.values():
-        assert r["held_out_unit_count"] > 0
+    assert all(r["held_out_unit_count"] > 0 for r in results.values())
+    assert all("dependence_gap_bits" in r for r in results.values())
 
 
-# ---- scorecard and discriminator (adversarial validation layers) ---------
+def test_crossfit_bpe_scale_curve_uses_quire_folds():
+    doc = parse_ivtff(IVTFF_SNIPPET)
+    rows, selected = cross_fit_bpe_scale_curve(doc.text_by_quire(), checkpoints=(0, 2, 4))
+    assert [r["merges"] for r in rows] == [0, 2, 4]
+    assert selected in {0, 2, 4}
+    assert all(r["folds"] == 2 for r in rows)
 
 
-def test_scorecard_d_infinity_is_small_for_matched_surrogate():
-    result = run_scorecard(LONG_SAMPLE, iid_glyph_surrogate, n_replicates=15, seed=0)
-    assert result.d_infinity == result.d_infinity  # not NaN given enough replicates
-    assert result.worst_feature != ""
+def test_scorecard_has_global_and_adjusted_p_values():
+    result = run_scorecard(LONG_SAMPLE, iid_glyph_surrogate, n_replicates=20, seed=0)
+    assert result.d_infinity == result.d_infinity
+    assert result.worst_feature
+    assert 0 < result.global_p_value <= 1
+    assert set(result.feature_p_holm) == set(result.observed)
+    assert all((p != p) or (0 <= p <= 1) for p in result.feature_p_holm.values())
 
 
-def test_classifier_two_sample_test_runs():
-    result = classifier_two_sample_test(
-        LONG_SAMPLE, iid_glyph_surrogate, block_size=10, n_generated_replicates=3, seed=0
-    )
-    assert 0.0 <= result.held_out_auc <= 1.0 or result.held_out_auc != result.held_out_auc
+def test_classifier_uses_multiple_grouped_splits():
+    result = classifier_two_sample_test(LONG_SAMPLE, iid_glyph_surrogate, block_size=20, n_generated_replicates=3, seed=0, n_splits=5)
+    assert result.n_splits >= 3
+    assert 0 <= result.held_out_auc <= 1
+    assert result.auc_ci_low <= result.held_out_auc <= result.auc_ci_high
+    assert "group-aware" in result.note.lower()
 
 
-# ---- replication targets ---------------------------------------------------
+def test_replication_targets_are_verified_and_corrected():
+    assert TARGETS["char_conditional_entropy_bits"].value == 2.69
+    assert TARGETS["cross_boundary_edge_mi_bits"].value == 0.197
+    assert TARGETS["certain_separator_unit_crossing_rate"].value == 0.025
+    assert "uncertain_separator_crossing_rate" not in TARGETS
+    rows = compare_to_targets({"bpe_crossfit_selected_merges": 32, "token_succession_entropy_fraction": 0.009})
+    assert all(r["reproduced"] is True for r in rows)
 
 
-def test_compare_to_targets_flags_mismatch_and_match():
-    observed = {
-        "char_conditional_entropy_bits": 2.7,  # matches target exactly
-        "end_to_start_flow_proportion": 0.1,  # far from published 0.806
-    }
-    rows = compare_to_targets(observed, tolerance=0.1)
-    by_metric = {r["metric"]: r for r in rows}
-    assert by_metric["char_conditional_entropy_bits"]["reproduced_within_tolerance"] is True
-    assert by_metric["end_to_start_flow_proportion"]["reproduced_within_tolerance"] is False
-    assert by_metric["end_to_start_flow_proportion"]["mismatch_reason"] == "UNRESOLVED"
+def test_replication_mismatch_is_explicit():
+    rows = compare_to_targets({"end_to_start_flow_proportion": 0.1}, tolerance=0.1)
+    assert rows[0]["reproduced"] is False
+    assert rows[0]["mismatch_reason"] == "UNRESOLVED"

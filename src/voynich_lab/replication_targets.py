@@ -1,29 +1,4 @@
-"""Published structural targets to reproduce before trusting any new model.
-
-Per the review: "Do not proceed because the plots look about right.
-Predeclare tolerances." These numbers are recorded here, with source and
-important caveats about the representation each was computed under, so a
-mismatch gets classified rather than glossed over. Treat MISMATCH_REASONS
-as a mandatory field, not an afterthought -- an unexplained mismatch is a
-finding, not noise to average away.
-
-Sources:
-  Rozanova & Temerev (2026), "A Glyph Is Not a Letter, a Token Is Not a
-    Word, a Space Is Not a Space" (arXiv:2608.17096) -- character
-    conditional entropy, conventional-token succession entropy fraction,
-    cross-boundary edge mutual information, BPE unit-scale transition,
-    certain- vs uncertain-separator crossing rate.
-  Parisel (2026), positional/directional structure paper -- End->Start
-    extremity-flow proportion, cross-boundary mutual information (bits),
-    generator pass/fail against the four combined targets.
-
-These are reproduction targets for *this project's own reimplementation*,
-not a substitute for reading the papers' methods sections. Metric
-definitions (representation, collapsing of composite EVA glyphs, line
-selection criteria) must match before a comparison is meaningful -- see
-MISMATCH_REASONS below.
-"""
-
+"""Verified literature targets for reproduction checks."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,97 +9,77 @@ class Target:
     name: str
     value: float
     source: str
+    comparison: str = "point"
     note: str = ""
+    verified: bool = True
 
 
 TARGETS: dict[str, Target] = {
     "char_conditional_entropy_bits": Target(
-        name="char_conditional_entropy_bits",
-        value=2.7,
-        source="Rozanova & Temerev 2026",
-        note="Composite-collapsed EVA representation; order-1 conditional entropy.",
+        "char_conditional_entropy_bits", 2.69, "Rozanova & Temerev 2026, arXiv:2608.17096",
+        note="Composite-collapsed EVA; first-order conditional entropy. Decomposed EVA is reported separately at 2.32 bits.",
     ),
     "token_succession_entropy_fraction": Target(
-        name="token_succession_entropy_fraction",
-        value=0.01,
-        source="Rozanova & Temerev 2026",
-        note="Upper bound: conventional-token identity explains <~1% of next-token entropy.",
+        "token_succession_entropy_fraction", 0.01, "Rozanova & Temerev 2026, arXiv:2608.17096",
+        comparison="upper_bound", note="Token identity explains under 1% of next-token entropy; 0.01 is an upper bound, not a point estimate.",
     ),
     "cross_boundary_edge_mi_bits": Target(
-        name="cross_boundary_edge_mi_bits",
-        value=0.2,
-        source="Rozanova & Temerev 2026",
-        note="Last-glyph-of-token vs first-glyph-of-next-token mutual information.",
+        "cross_boundary_edge_mi_bits", 0.197, "Rozanova & Temerev 2026, arXiv:2608.17096",
+        note="Shuffle-corrected last-glyph to first-glyph edge information, observed-space analysis.",
     ),
-    "bpe_scale_transition_merges_low": Target(
-        name="bpe_scale_transition_merges_low",
-        value=32,
-        source="Rozanova & Temerev 2026",
-        note="Held-out cross-fitted minimum; reported range extends toward ~64.",
+    "bpe_crossfit_gap_0_bits": Target("bpe_crossfit_gap_0_bits", 1.686, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 0 merges."),
+    "bpe_crossfit_gap_16_bits": Target("bpe_crossfit_gap_16_bits", 1.423, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 16 merges."),
+    "bpe_crossfit_gap_32_bits": Target("bpe_crossfit_gap_32_bits", 1.379, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 32 merges."),
+    "bpe_crossfit_gap_64_bits": Target("bpe_crossfit_gap_64_bits", 1.490, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 64 merges."),
+    "bpe_crossfit_selected_merges": Target(
+        "bpe_crossfit_selected_merges", 32, "Rozanova & Temerev 2026, arXiv:2608.17096",
+        comparison="exact_integer", note="Held-out minimum among 0/16/32/64 checkpoints. The pooled/in-sample minimum was 64.",
     ),
-    "uncertain_separator_crossing_rate": Target(
-        name="uncertain_separator_crossing_rate",
-        value=0.203,
-        source="Rozanova & Temerev 2026",
-        note="Fraction of learned-unit boundaries crossing transcriber-marked uncertain spaces.",
-    ),
-    "certain_separator_crossing_rate": Target(
-        name="certain_separator_crossing_rate",
-        value=0.025,
-        source="Rozanova & Temerev 2026",
-        note="Same statistic for certain spaces; should be far below the uncertain-space rate.",
+    "certain_separator_unit_crossing_rate": Target(
+        "certain_separator_unit_crossing_rate", 0.025, "Rozanova & Temerev 2026, arXiv:2608.17096",
+        note="Share of hidden certain/conventional token boundaries crossed by learned units after spaces are erased; reported as 2.5% for Voynichese in Table 7.",
     ),
     "end_to_start_flow_proportion": Target(
-        name="end_to_start_flow_proportion",
-        value=0.806,
-        source="Parisel 2026",
-        note="Proportion of extremity flow classified End->Start.",
+        "end_to_start_flow_proportion", 0.806, "Parisel 2026, arXiv:2604.19762",
+        note="Reported End-to-Start positional-class transition proportion.",
     ),
     "cross_boundary_mutual_information_bits": Target(
-        name="cross_boundary_mutual_information_bits",
-        value=0.230,
-        source="Parisel 2026",
-        note="Distinct metric definition from Rozanova's edge-MI figure -- do not conflate the two.",
+        "cross_boundary_mutual_information_bits", 0.230, "Parisel 2026, arXiv:2604.19762",
+        note="Parisel total cross-boundary MI. This is not identical to Rozanova & Temerev's edge-MI implementation.",
     ),
 }
 
 MISMATCH_REASONS = (
-    "DATA_VERSION",
-    "TRANSCRIPTION_NORMALIZATION",
-    "METRIC_DEFINITION",
-    "RANDOM_SEED",
-    "IMPLEMENTATION_ERROR",
-    "PAPER_AMBIGUITY",
-    "UNRESOLVED",
+    "DATA_VERSION", "TRANSCRIPTION_NORMALIZATION", "METRIC_DEFINITION", "RANDOM_SEED",
+    "IMPLEMENTATION_ERROR", "PAPER_AMBIGUITY", "UNRESOLVED",
 )
 
 
-def compare_to_targets(
-    observed: dict[str, float], tolerance: float = 0.25
-) -> list[dict[str, object]]:
-    """Relative-error comparison against each target present in `observed`.
-    tolerance is a fractional relative-error threshold (0.25 = within 25%
-    of the published value counts as reproduced); this is a coarse default
-    and should be tightened per-metric once you understand each metric's
-    own sampling variance, per the review's delta_s / CI-overlap guidance.
-    """
+def compare_to_targets(observed: dict[str, float], tolerance: float = 0.10) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for key, target in TARGETS.items():
         if key not in observed:
             continue
-        obs = observed[key]
-        denom = max(abs(target.value), 1e-9)
-        delta = abs(obs - target.value) / denom
-        rows.append(
-            {
-                "metric": key,
-                "observed": obs,
-                "published_target": target.value,
-                "relative_error": delta,
-                "reproduced_within_tolerance": bool(delta <= tolerance),
-                "source": target.source,
-                "note": target.note,
-                "mismatch_reason": "" if delta <= tolerance else "UNRESOLVED",
-            }
-        )
+        obs = float(observed[key])
+        if target.comparison == "upper_bound":
+            passed = obs <= target.value
+            delta = max(0.0, obs - target.value) / max(abs(target.value), 1e-12)
+        elif target.comparison == "exact_integer":
+            passed = int(round(obs)) == int(round(target.value))
+            delta = abs(obs - target.value)
+        else:
+            delta = abs(obs - target.value) / max(abs(target.value), 1e-12)
+            passed = delta <= tolerance
+        rows.append({
+            "metric": key,
+            "observed": obs,
+            "published_target": target.value,
+            "comparison": target.comparison,
+            "error_or_excess": delta,
+            "reproduced": bool(passed) if target.verified else None,
+            "verified_target": target.verified,
+            "source": target.source,
+            "note": target.note,
+            "mismatch_reason": "" if passed else "UNRESOLVED",
+        })
     return rows
