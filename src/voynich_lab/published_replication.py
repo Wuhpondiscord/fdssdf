@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from math import log2
+import random
 import re
 
 import numpy as np
@@ -19,6 +20,7 @@ BAD_UNIT = set("?*<>{}[]()|@")
 BAD_ENTROPY = set("?*<>{}[]()|")
 CAP = 2000
 ORDER_SEED = 20260816
+TOKEN_ORDER_SEED = 20260810
 SUBSTITUTIONS = (
     ("cth", "T"),
     ("ckh", "K"),
@@ -248,14 +250,82 @@ def _encode_order_lines(lines: list[list[str]], cap: int = CAP) -> dict[str, obj
     }
 
 
+def _token_mutual_information(lines: list[list[str]]) -> tuple[float, float]:
+    unigram = Counter(token for line in lines for token in line)
+    previous = Counter()
+    following = Counter()
+    bigram = Counter()
+    for line in lines:
+        for left, right in zip(line, line[1:]):
+            previous[left] += 1
+            following[right] += 1
+            bigram[(left, right)] += 1
+    n = sum(unigram.values())
+    n_pairs = sum(bigram.values())
+    if n == 0 or n_pairs == 0:
+        return float("nan"), float("nan")
+    entropy = -sum(count / n * log2(count / n) for count in unigram.values())
+    entropy_previous = -sum(
+        count / n_pairs * log2(count / n_pairs) for count in previous.values()
+    )
+    entropy_following = -sum(
+        count / n_pairs * log2(count / n_pairs) for count in following.values()
+    )
+    entropy_pair = -sum(
+        count / n_pairs * log2(count / n_pairs) for count in bigram.values()
+    )
+    return entropy_previous + entropy_following - entropy_pair, entropy
+
+
+def _token_order_information(
+    lines: list[list[str]],
+    *,
+    cap: int = CAP,
+    shuffles: int = 100,
+    seed: int = TOKEN_ORDER_SEED,
+) -> dict[str, float]:
+    """Exact reproduce_scale_transition.order_information convention."""
+    frequency = Counter(token for line in lines for token in line)
+    retained = {token for token, _ in frequency.most_common(cap)}
+    recoded = [
+        [token if token in retained else "<other>" for token in line]
+        for line in lines
+        if len(line) >= 2
+    ]
+    observed, entropy = _token_mutual_information(recoded)
+    rng = random.Random(seed)
+    null: list[float] = []
+    for _ in range(max(1, int(shuffles))):
+        permuted = [list(line) for line in recoded]
+        for line in permuted:
+            rng.shuffle(line)
+        null.append(_token_mutual_information(permuted)[0])
+    null_mean = sum(null) / len(null)
+    excess = observed - null_mean
+    return {
+        "observed_mi_bits": float(observed),
+        "shuffle_mean_mi_bits": float(null_mean),
+        "excess_bits": float(excess),
+        "entropy_bits": float(entropy),
+        "share": float(excess / entropy) if entropy > 0 else float("nan"),
+    }
+
+
 def paper_order_metrics(
     raw_text: str,
     *,
     shuffles: int = 100,
     seed: int = ORDER_SEED,
+    token_seed: int = TOKEN_ORDER_SEED,
     cap: int = CAP,
 ) -> dict[str, float | int]:
-    """Reproduce the two published within-line shuffle-corrected order targets."""
+    """Reproduce the published edge-MI and token-succession targets.
+
+    The two headline numbers deliberately use different null implementations in
+    the public reproduction code. Edge MI follows reproduce_edge_order.py
+    (NumPy RNG, seed 20260816). Token succession follows
+    reproduce_scale_transition.py (Python random.Random, seed 20260810).
+    """
     records = strict_space_records(raw_text)
     lines = [
         [collapse_composites(token) for token in record["tokens"]]  # type: ignore[index]
@@ -279,36 +349,35 @@ def paper_order_metrics(
     obs_left = positions[:-1][same]
     obs_right = positions[1:][same]
 
-    def metric(left: np.ndarray, right: np.ndarray, left_name: str, right_name: str) -> float:
-        return _pair_mi(features[left_name][left], features[right_name][right], sizes[right_name])
+    def edge_metric(left: np.ndarray, right: np.ndarray) -> float:
+        return _pair_mi(features["last1"][left], features["first1"][right], sizes["first1"])
 
-    edge_observed = metric(obs_left, obs_right, "last1", "first1")
-    token_observed = metric(obs_left, obs_right, "ident", "ident")
-
-    ident_counts = np.bincount(features["ident"])
-    token_entropy = _entropy_from_counts(ident_counts)
+    edge_observed = edge_metric(obs_left, obs_right)
     rng = np.random.default_rng(seed)
     edge_null = np.empty(max(1, int(shuffles)))
-    token_null = np.empty(max(1, int(shuffles)))
     for index in range(len(edge_null)):
         keys = rng.random(n)
         perm = np.lexsort((keys, line_ids))
         left = perm[:-1][same]
         right = perm[1:][same]
-        edge_null[index] = metric(left, right, "last1", "first1")
-        token_null[index] = metric(left, right, "ident", "ident")
-
+        edge_null[index] = edge_metric(left, right)
     edge_excess = edge_observed - float(edge_null.mean())
-    token_excess = token_observed - float(token_null.mean())
-    token_share = token_excess / token_entropy if token_entropy > 0 else float("nan")
+
+    token_order = _token_order_information(
+        lines,
+        cap=cap,
+        shuffles=shuffles,
+        seed=token_seed,
+    )
     return {
         "cross_boundary_edge_mi_bits": float(edge_excess),
-        "token_succession_entropy_fraction": float(token_share),
+        "token_succession_entropy_fraction": float(token_order["share"]),
         "edge_observed_mi_bits": float(edge_observed),
         "edge_shuffle_mean_mi_bits": float(edge_null.mean()),
-        "token_observed_mi_bits": float(token_observed),
-        "token_shuffle_mean_mi_bits": float(token_null.mean()),
-        "token_identity_entropy_bits": float(token_entropy),
+        "token_observed_mi_bits": float(token_order["observed_mi_bits"]),
+        "token_shuffle_mean_mi_bits": float(token_order["shuffle_mean_mi_bits"]),
+        "token_excess_mi_bits": float(token_order["excess_bits"]),
+        "token_identity_entropy_bits": float(token_order["entropy_bits"]),
         "order_lines": len(lines),
         "order_tokens": n,
     }
@@ -319,6 +388,7 @@ def automatic_replication_metrics(
     *,
     shuffles: int = 100,
     order_seed: int = ORDER_SEED,
+    token_order_seed: int = TOKEN_ORDER_SEED,
     bpe_checkpoints: tuple[int, ...] = (0, 16, 32, 64),
 ) -> tuple[dict[str, float], dict[str, object]]:
     """Compute every currently unambiguous Rozanova/Temerev gate target.
@@ -336,7 +406,9 @@ def automatic_replication_metrics(
     observed["char_conditional_entropy_bits"] = float(char_h2)
     diagnostics["entropy_tokens"] = len(entropy_corpus_tokens(raw_text))
 
-    order = paper_order_metrics(raw_text, shuffles=shuffles, seed=order_seed)
+    order = paper_order_metrics(
+        raw_text, shuffles=shuffles, seed=order_seed, token_seed=token_order_seed
+    )
     observed["cross_boundary_edge_mi_bits"] = float(order["cross_boundary_edge_mi_bits"])
     observed["token_succession_entropy_fraction"] = float(order["token_succession_entropy_fraction"])
     diagnostics["order"] = order
