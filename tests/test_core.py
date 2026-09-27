@@ -10,7 +10,16 @@ from voynich_lab.longrange import block_entropy, dfa_fluctuation, lagged_mutual_
 from voynich_lab.metrics import compute_metrics, glyph_stream, normalize_text
 from voynich_lab.replication_targets import TARGETS, compare_to_targets
 from voynich_lab.scorecard import run_scorecard
-from voynich_lab.segmentation import apply_bpe_merges, cross_fit_bpe_by_quire, cross_fit_bpe_scale_curve, discover_bpe_units, learn_bpe_merges
+from voynich_lab.segmentation import (
+    apply_bpe_merges,
+    apply_token_bpe_rules,
+    cross_fit_bpe_by_quire,
+    cross_fit_bpe_scale_curve,
+    discover_bpe_units,
+    learn_bpe_merges,
+    learn_token_bpe_rules,
+    unit_stream_stats,
+)
 from voynich_lab.surrogates import block_shuffle_surrogate, iid_glyph_surrogate, markov1_surrogate, markov_k_surrogate, position_conditioned_markov_surrogate
 
 SAMPLE = "qokeedy qokedy\nchedy qokeedy"
@@ -148,12 +157,36 @@ def test_learn_and_apply_bpe_merges_no_leakage():
     assert len(segmented) <= len(glyph_stream(held_out))
 
 
+def test_token_bpe_never_learns_across_conventional_token_boundary():
+    lines = [["ab", "cd"] for _ in range(10)]
+    rules = learn_token_bpe_rules(lines, max_merges=4)
+    assert all((left, right) != ("b", "c") for left, right, _merged in rules)
+    segmented = apply_token_bpe_rules([["ab", "cd"]], rules, merge_count=4)
+    assert set(segmented) == {"ab", "cd"}
+
+
+def test_token_bpe_pair_counts_are_weighted_by_token_frequency():
+    lines = [["ab"], ["ab"], ["ab"], ["ac"]]
+    rules = learn_token_bpe_rules(lines, max_merges=1)
+    assert rules[0][:2] == ("a", "b")
+
+
+def test_unit_stream_stats_cross_tokens_within_line_but_not_lines():
+    lines = [["a", "b"], ["a", "c"]]
+    segmentation = {word: tuple(word) for line in lines for word in line}
+    stats = unit_stream_stats(lines, segmentation)
+    assert abs(stats["H1"] - 1.5) < 1e-12
+    assert abs(stats["H2"] - 1.0) < 1e-12
+    assert abs(stats["gap"] - 0.5) < 1e-12
+
+
 def test_cross_fit_bpe_by_quire_runs_per_quire():
     text_by_quire = {"Q1": LONG_SAMPLE, "Q2": ("chedy qokeedy daiin shedy " * 20)}
     results = cross_fit_bpe_by_quire(text_by_quire, merges=8)
     assert set(results) == {"Q1", "Q2"}
     assert all(r["held_out_unit_count"] > 0 for r in results.values())
     assert all("dependence_gap_bits" in r for r in results.values())
+    assert all("H1_bits" in r and "bits_per_glyph" in r for r in results.values())
 
 
 def test_crossfit_bpe_scale_curve_uses_quire_folds():
@@ -162,6 +195,8 @@ def test_crossfit_bpe_scale_curve_uses_quire_folds():
     assert [r["merges"] for r in rows] == [0, 2, 4]
     assert selected in {0, 2, 4}
     assert all(r["folds"] == 2 for r in rows)
+    assert all("H1_bits" in r and "H2_conditional_bits" in r for r in rows)
+    assert all("bits_per_glyph" in r and "mean_unit_length" in r for r in rows)
 
 
 def test_scorecard_has_global_and_adjusted_p_values():
