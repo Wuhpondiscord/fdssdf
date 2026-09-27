@@ -7,7 +7,11 @@ import re
 
 import numpy as np
 
-from .segmentation import cross_fit_bpe_scale_curve
+from .segmentation import (
+    apply_token_bpe_rules,
+    cross_fit_bpe_scale_curve,
+    learn_token_bpe_rules,
+)
 
 # Public reproduction conventions from lrozanova/voynich-units.
 # These are intentionally separate because the paper's headline analyses use
@@ -383,6 +387,94 @@ def paper_order_metrics(
     }
 
 
+def erased_space_crossing_rates(
+    raw_text: str,
+    *,
+    merges: int = 64,
+) -> dict[str, object]:
+    """Cross hidden separator positions after BPE is fitted to space-erased lines.
+
+    This mirrors ``reproduce_space_sensitivity.py``: each qualifying manuscript
+    line becomes one continuous BPE token, rules are fitted in-sample across the
+    full strict-separator subset, and the resulting learned-unit boundaries are
+    compared with the original certain and uncertain separator positions.
+    """
+    records = strict_space_records(raw_text)
+    erased_lines = [["".join(record["tokens"])] for record in records]  # type: ignore[index]
+    if not erased_lines:
+        return {
+            "merges": int(merges),
+            "certain": {"crossed": 0, "total": 0, "rate": float("nan")},
+            "uncertain": {"crossed": 0, "total": 0, "rate": float("nan")},
+            "all_positions": {"crossed": 0, "total": 0, "rate": float("nan")},
+        }
+
+    rules = learn_token_bpe_rules(erased_lines, max_merges=int(merges))
+    segmentation = apply_token_bpe_rules(
+        erased_lines, rules, merge_count=int(merges)
+    )
+    counts = {
+        "certain": {"crossed": 0, "total": 0},
+        "uncertain": {"crossed": 0, "total": 0},
+        "all_positions": {"crossed": 0, "total": 0},
+    }
+    quire_counts: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: {
+            "certain": {"crossed": 0, "total": 0},
+            "uncertain": {"crossed": 0, "total": 0},
+        }
+    )
+
+    for record in records:
+        tokens = record["tokens"]  # type: ignore[assignment]
+        separators = record["separators"]  # type: ignore[assignment]
+        text = "".join(tokens)
+        units = segmentation[text]
+        learned_boundaries = set(np.cumsum([len(unit) for unit in units])[:-1])
+        observed_positions = np.cumsum([len(token) for token in tokens])[:-1]
+        quire = str(record["quire"])
+        for position, status in zip(observed_positions, separators):
+            label = "uncertain" if status == "u" else "certain"
+            crossed = int(position not in learned_boundaries)
+            counts[label]["crossed"] += crossed
+            counts[label]["total"] += 1
+            quire_counts[quire][label]["crossed"] += crossed
+            quire_counts[quire][label]["total"] += 1
+        for position in range(1, len(text)):
+            crossed = int(position not in learned_boundaries)
+            counts["all_positions"]["crossed"] += crossed
+            counts["all_positions"]["total"] += 1
+
+    output: dict[str, object] = {
+        "merges": int(merges),
+        "merges_learned": len(rules),
+    }
+    for label, values in counts.items():
+        total = values["total"]
+        output[label] = {
+            "crossed": values["crossed"],
+            "total": total,
+            "rate": values["crossed"] / total if total else float("nan"),
+        }
+    output["quire_rates"] = [
+        {
+            "quire": quire,
+            "certain": (
+                values["certain"]["crossed"] / values["certain"]["total"]
+                if values["certain"]["total"]
+                else None
+            ),
+            "uncertain": (
+                values["uncertain"]["crossed"] / values["uncertain"]["total"]
+                if values["uncertain"]["total"]
+                else None
+            ),
+        }
+        for quire, values in sorted(quire_counts.items())
+    ]
+    return output
+
+
 def automatic_replication_metrics(
     raw_text: str,
     *,
@@ -393,11 +485,9 @@ def automatic_replication_metrics(
 ) -> tuple[dict[str, float], dict[str, object]]:
     """Compute every currently unambiguous Rozanova/Temerev gate target.
 
-    The 2.5% certain-separator crossing target is deliberately not emitted here
-    yet: the public space-sensitivity driver reports crossing rates at 32, 64,
-    and 128 erased-space BPE merges, while the target citation currently lacks
-    an explicit checkpoint. Auto-scoring it before that is resolved would make
-    a methodologically ambiguous comparison.
+    The automatic path includes the paper's 64-merge erased-space crossing
+    statistic in addition to entropy, order, and leave-one-quire-out unit-scale
+    metrics.
     """
     observed: dict[str, float] = {}
     diagnostics: dict[str, object] = {}
@@ -412,6 +502,11 @@ def automatic_replication_metrics(
     observed["cross_boundary_edge_mi_bits"] = float(order["cross_boundary_edge_mi_bits"])
     observed["token_succession_entropy_fraction"] = float(order["token_succession_entropy_fraction"])
     diagnostics["order"] = order
+
+    crossing = erased_space_crossing_rates(raw_text, merges=64)
+    certain = crossing["certain"]
+    observed["certain_separator_unit_crossing_rate"] = float(certain["rate"])
+    diagnostics["erased_space_crossing"] = crossing
 
     by_quire = unit_scale_text_by_quire(raw_text)
     diagnostics["unit_scale_quires"] = sorted(by_quire)
