@@ -17,27 +17,28 @@ class Target:
 TARGETS: dict[str, Target] = {
     "char_conditional_entropy_bits": Target(
         "char_conditional_entropy_bits", 2.69, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        note="Composite-collapsed EVA; first-order conditional entropy. Decomposed EVA is reported separately at 2.32 bits.",
+        note="Composite-collapsed EVA; first-order conditional entropy after P-locus cleaning and erasing token/line boundaries from the character sequence. Decomposed EVA is reported separately at 2.32 bits.",
     ),
     "token_succession_entropy_fraction": Target(
         "token_succession_entropy_fraction", 0.01, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        comparison="upper_bound", note="Token identity explains under 1% of next-token entropy; 0.01 is an upper bound, not a point estimate.",
+        comparison="upper_bound",
+        note="Shuffle-corrected adjacent capped-token MI divided by the full capped-token marginal entropy H(T), using a 2,000-type cap and within-line shuffles. The paper reports under 1%; 0.01 is retained here as an upper bound rather than a point target.",
     ),
     "cross_boundary_edge_mi_bits": Target(
         "cross_boundary_edge_mi_bits", 0.197, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        note="Shuffle-corrected last-glyph to first-glyph edge information, observed-space analysis.",
+        note="Shuffle-corrected last-glyph(token t) to first-glyph(token t+1) MI on composite-collapsed observed-space lines; 100 within-line shuffles in the public reproduction.",
     ),
-    "bpe_crossfit_gap_0_bits": Target("bpe_crossfit_gap_0_bits", 1.686, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 0 merges."),
-    "bpe_crossfit_gap_16_bits": Target("bpe_crossfit_gap_16_bits", 1.423, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 16 merges."),
-    "bpe_crossfit_gap_32_bits": Target("bpe_crossfit_gap_32_bits", 1.379, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 32 merges."),
-    "bpe_crossfit_gap_64_bits": Target("bpe_crossfit_gap_64_bits", 1.490, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap, 64 merges."),
+    "bpe_crossfit_gap_0_bits": Target("bpe_crossfit_gap_0_bits", 1.686, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap H1-H2, 0 within-token BPE merges."),
+    "bpe_crossfit_gap_16_bits": Target("bpe_crossfit_gap_16_bits", 1.423, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap H1-H2, 16 within-token BPE merges."),
+    "bpe_crossfit_gap_32_bits": Target("bpe_crossfit_gap_32_bits", 1.379, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap H1-H2, 32 within-token BPE merges."),
+    "bpe_crossfit_gap_64_bits": Target("bpe_crossfit_gap_64_bits", 1.490, "Rozanova & Temerev 2026, arXiv:2608.17096", note="Glyph-weighted leave-one-quire-out dependence gap H1-H2, 64 within-token BPE merges."),
     "bpe_crossfit_selected_merges": Target(
         "bpe_crossfit_selected_merges", 32, "Rozanova & Temerev 2026, arXiv:2608.17096",
         comparison="exact_integer", note="Held-out minimum among 0/16/32/64 checkpoints. The pooled/in-sample minimum was 64.",
     ),
     "certain_separator_unit_crossing_rate": Target(
         "certain_separator_unit_crossing_rate", 0.025, "Rozanova & Temerev 2026, arXiv:2608.17096",
-        note="Share of hidden certain/conventional token boundaries crossed by learned units after spaces are erased; reported as 2.5% for Voynichese in Table 7.",
+        note="Share of hidden certain/conventional token boundaries crossed by learned units after spaces are erased; reported as 2.5% for Voynichese in Table 7. The public space-sensitivity driver reports 32/64/128-merge crossing rates, so this target is not auto-scored until the table's specific checkpoint is pinned down.",
     ),
     "end_to_start_flow_proportion": Target(
         "end_to_start_flow_proportion", 0.806, "Parisel 2026, arXiv:2604.19762",
