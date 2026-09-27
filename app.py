@@ -20,6 +20,7 @@ from voynich_lab.hf_sync import configured_space_value, push_snapshot, sync_stat
 from voynich_lab.ivtff import is_ivtff, parse_ivtff
 from voynich_lab.longrange import block_entropy, dfa_fluctuation, lagged_mi_with_shuffle_baseline
 from voynich_lab.metrics import compute_metrics, normalize_text, positional_entropy_by_decile
+from voynich_lab.published_replication import automatic_replication_metrics, unit_scale_text_by_quire
 from voynich_lab.replication_targets import compare_to_targets
 from voynich_lab.scorecard import scorecard_to_rows, run_scorecard
 from voynich_lab.segmentation import cross_fit_bpe_scale_curve, discover_bpe_units
@@ -54,7 +55,7 @@ def load_uploaded(file_path: str | None, pasted: str):
         if not doc.lines:
             return raw, "", "Input resembles IVTFF, but no locus text could be parsed.", ""
         quires = doc.quires_present()
-        langs = sorted({l.currier_language for l in doc.lines if l.currier_language})
+        langs = sorted({line.currier_language for line in doc.lines if line.currier_language})
         status = (
             f"Loaded {source} as IVTFF: {len(doc.lines):,} loci, {len(doc.pages):,} page headers. "
             f"Native quires: {', '.join(quires) if quires else 'none found'}; "
@@ -69,7 +70,11 @@ def load_uploaded(file_path: str | None, pasted: str):
 def run_metrics_ui(text: str):
     if not text.strip():
         raise gr.Error("Load a transcription first.")
-    return pd.DataFrame([{"metric": k, "value": v} for k, v in compute_metrics(text).items()]), pd.DataFrame([{"position_bin": k, "glyph_entropy_bits": v} for k, v in positional_entropy_by_decile(text).items()])
+    metrics = pd.DataFrame([{"metric": key, "value": value} for key, value in compute_metrics(text).items()])
+    positional = pd.DataFrame(
+        [{"position_bin": key, "glyph_entropy_bits": value} for key, value in positional_entropy_by_decile(text).items()]
+    )
+    return metrics, positional
 
 
 def run_harness_ui(text: str, replicates: int, seed: int):
@@ -88,13 +93,25 @@ def run_bpe_ui(text: str, merges: int):
 
 def run_bpe_crossfit_ui(raw_text: str):
     if not raw_text.strip() or not is_ivtff(raw_text):
-        raise gr.Error("Cross-fit BPE needs IVTFF input with quire metadata ($Q).")
-    doc = parse_ivtff(raw_text)
-    by_quire = doc.text_by_quire()
+        raise gr.Error("Cross-fit BPE needs IVTFF input with native quire metadata ($Q).")
+    by_quire = unit_scale_text_by_quire(raw_text)
     if len(by_quire) < 2:
-        raise gr.Error("Fewer than two quires with native $Q metadata were found.")
+        raise gr.Error("Fewer than two unit-scale quire groups were found after paper-exact P-locus cleaning.")
     rows, selected = cross_fit_bpe_scale_curve(by_quire, checkpoints=(0, 16, 32, 64))
-    table_rows = [{"merges": r["merges"], "glyph_weighted_dependence_gap_bits": r["glyph_weighted_dependence_gap_bits"], "folds": r["folds"], "per_quire_gaps": json.dumps(r["fold_values"], sort_keys=True)} for r in rows]
+    table_rows = [
+        {
+            "merges": row["merges"],
+            "mean_unit_length": row["mean_unit_length"],
+            "H1_bits": row["H1_bits"],
+            "H2_conditional_bits": row["H2_conditional_bits"],
+            "bits_per_glyph": row["bits_per_glyph"],
+            "glyph_weighted_dependence_gap_bits": row["glyph_weighted_dependence_gap_bits"],
+            "glyphs": row["glyphs"],
+            "folds": row["folds"],
+            "per_quire_gaps": json.dumps(row["fold_values"], sort_keys=True),
+        }
+        for row in rows
+    ]
     return pd.DataFrame(table_rows), f"Held-out minimum among 0/16/32/64 merges: {selected}"
 
 
@@ -116,17 +133,40 @@ def run_ivtff_ui(raw_text: str):
     for line in doc.lines:
         for sep in line.separators:
             counts[sep] = counts.get(sep, 0) + 1
-    folios = sorted({l.folio for l in doc.lines})
-    summary = f"Parsed {len(doc.lines)} loci across {len(folios)} folios. Boundary observations: {counts}. Native $Q metadata: {sum(1 for l in doc.lines if l.quire)}/{len(doc.lines)} loci. Warnings: {len(doc.warnings)}."
-    preview = pd.DataFrame([{"folio": l.folio, "line": l.line_no, "quire": l.quire, "Currier_L": l.currier_language, "hand": l.hand, "illustration": l.illustration_type, "locus_code": l.locus_code, "tokens": " | ".join(t.text for t in l.tokens)} for l in doc.lines[:100]])
-    page_meta = pd.DataFrame([{"folio": folio, **{f"${k}": v for k, v in page.variables.items()}} for folio, page in sorted(doc.pages.items())])
+    folios = sorted({line.folio for line in doc.lines})
+    summary = (
+        f"Parsed {len(doc.lines)} loci across {len(folios)} folios. Boundary observations: {counts}. "
+        f"Native $Q metadata: {sum(1 for line in doc.lines if line.quire)}/{len(doc.lines)} loci. "
+        f"Warnings: {len(doc.warnings)}."
+    )
+    preview = pd.DataFrame(
+        [
+            {
+                "folio": line.folio,
+                "line": line.line_no,
+                "quire": line.quire,
+                "Currier_L": line.currier_language,
+                "hand": line.hand,
+                "illustration": line.illustration_type,
+                "locus_code": line.locus_code,
+                "tokens": " | ".join(token.text for token in line.tokens),
+            }
+            for line in doc.lines[:100]
+        ]
+    )
+    page_meta = pd.DataFrame(
+        [
+            {"folio": folio, **{f"${key}": value for key, value in page.variables.items()}}
+            for folio, page in sorted(doc.pages.items())
+        ]
+    )
     return summary, preview, page_meta
 
 
 # Every generator exposed to scorecard/discriminator obeys the same
 # (text, seed) -> generated_text contract. Wrappers are explicit here because
 # markov_k/block_shuffle/position_conditioned otherwise have a second
-# positional argument that is *not* the random seed.
+# positional argument that is not the random seed.
 GENERATOR_CHOICES = {
     "N0 i.i.d. glyph (layout fixed)": iid_glyph_surrogate,
     "N1 order-1 Markov (layout fixed)": markov1_surrogate,
@@ -141,26 +181,52 @@ GENERATOR_CHOICES = {
 def run_longrange_ui(text: str, max_lag: int, permutations: int, dfa_min: int, dfa_max: int, dfa_steps: int):
     if not text.strip():
         raise gr.Error("Load a transcription first.")
-    mi_rows = lagged_mi_with_shuffle_baseline(text, max_lag=int(max_lag), n_permutations=int(permutations), seed=0)
+    mi_rows = lagged_mi_with_shuffle_baseline(
+        text, max_lag=int(max_lag), n_permutations=int(permutations), seed=0
+    )
     be = block_entropy(text)
     box_sizes = tuple(sorted(set(int(x) for x in np.linspace(int(dfa_min), int(dfa_max), int(dfa_steps)))))
     fluct, alpha = dfa_fluctuation(text, box_sizes=box_sizes)
-    return pd.DataFrame(mi_rows), pd.DataFrame([{"block_size": k, "per_symbol_entropy_bits": v} for k, v in be.items()]), pd.DataFrame([{"box_size": k, "rms_fluctuation": v} for k, v in fluct.items()]), f"Descriptive DFA-style scaling exponent α = {alpha:.3f}. Interpret relative to matched nulls; do not use α=0.5 as a stand-alone rule."
+    return (
+        pd.DataFrame(mi_rows),
+        pd.DataFrame([{"block_size": key, "per_symbol_entropy_bits": value} for key, value in be.items()]),
+        pd.DataFrame([{"box_size": key, "rms_fluctuation": value} for key, value in fluct.items()]),
+        f"Descriptive DFA-style scaling exponent α = {alpha:.3f}. Interpret relative to matched nulls; do not use α=0.5 as a stand-alone rule.",
+    )
 
 
 def run_scorecard_ui(text: str, generator_name: str, n_replicates: int, seed: int):
     if not text.strip():
         raise gr.Error("Load a transcription first.")
-    result = run_scorecard(text, GENERATOR_CHOICES[generator_name], n_replicates=int(n_replicates), seed=int(seed))
-    verdict = f"D∞ = {result.d_infinity:.3f}; worst feature = {result.worst_feature}; global leave-one-replicate-out Monte Carlo p = {result.global_p_value:.4f}. Use a preregistered alpha threshold; feature p-values are Holm-adjusted in the table."
+    result = run_scorecard(
+        text,
+        GENERATOR_CHOICES[generator_name],
+        n_replicates=int(n_replicates),
+        seed=int(seed),
+    )
+    verdict = (
+        f"D∞ = {result.d_infinity:.3f}; worst feature = {result.worst_feature}; "
+        f"global leave-one-replicate-out Monte Carlo p = {result.global_p_value:.4f}. "
+        "Use a preregistered alpha threshold; feature p-values are Holm-adjusted in the table."
+    )
     return pd.DataFrame(scorecard_to_rows(result)), verdict
 
 
 def run_discriminator_ui(text: str, generator_name: str, block_size: int, n_gen_replicates: int, seed: int):
     if not text.strip():
         raise gr.Error("Load a transcription first.")
-    result = classifier_two_sample_test(text, GENERATOR_CHOICES[generator_name], block_size=int(block_size), n_generated_replicates=int(n_gen_replicates), seed=int(seed))
-    return f"Group-aware held-out AUC = {result.held_out_auc:.3f} ± {result.auc_sd:.3f}; split interval [{result.auc_ci_low:.3f}, {result.auc_ci_high:.3f}] across {result.n_splits} valid splits. {result.n_real_blocks} real blocks vs {result.n_generated_blocks} generated blocks.\n{result.note}"
+    result = classifier_two_sample_test(
+        text,
+        GENERATOR_CHOICES[generator_name],
+        block_size=int(block_size),
+        n_generated_replicates=int(n_gen_replicates),
+        seed=int(seed),
+    )
+    return (
+        f"Group-aware held-out AUC = {result.held_out_auc:.3f} ± {result.auc_sd:.3f}; "
+        f"split interval [{result.auc_ci_low:.3f}, {result.auc_ci_high:.3f}] across {result.n_splits} valid splits. "
+        f"{result.n_real_blocks} real blocks vs {result.n_generated_blocks} generated blocks.\n{result.note}"
+    )
 
 
 def run_replication_ui(observed_json: str, tolerance: float):
@@ -176,6 +242,26 @@ def run_replication_ui(observed_json: str, tolerance: float):
     return pd.DataFrame(rows)
 
 
+def run_automatic_replication_ui(raw_text: str, tolerance: float):
+    if not raw_text.strip() or not is_ivtff(raw_text):
+        raise gr.Error("Automatic literature reproduction requires the original IVTFF transcription.")
+    observed, diagnostics = automatic_replication_metrics(raw_text, shuffles=100)
+    rows = compare_to_targets(observed, tolerance=float(tolerance))
+    note = {
+        "method": "Rozanova & Temerev public reproduction conventions",
+        "shuffle_count": 100,
+        "auto_scored_targets": sorted(observed),
+        "not_auto_scored": {
+            "certain_separator_unit_crossing_rate": (
+                "The public driver reports erased-space crossing at 32, 64, and 128 merges, "
+                "but the 2.5% target citation does not yet identify which checkpoint to compare."
+            )
+        },
+        "diagnostics": diagnostics,
+    }
+    return json.dumps(observed, indent=2, sort_keys=True), json.dumps(note, indent=2, sort_keys=True), pd.DataFrame(rows)
+
+
 def push_ui(target: str):
     try:
         return push_snapshot(target)
@@ -185,7 +271,10 @@ def push_ui(target: str):
 
 with gr.Blocks(title=APP_TITLE) as demo:
     gr.Markdown(f"# {APP_TITLE}")
-    gr.Markdown("Falsification-first structural analysis. IVTFF markup is parsed as metadata and excluded from manuscript glyph statistics. Conventional transcription tokens remain observations, not assumed linguistic words.")
+    gr.Markdown(
+        "Falsification-first structural analysis. IVTFF markup is parsed as metadata and excluded from manuscript glyph statistics. "
+        "Conventional transcription tokens remain observations, not assumed linguistic words."
+    )
     raw_state = gr.State("")
     text_state = gr.State("")
 
@@ -212,7 +301,10 @@ with gr.Blocks(title=APP_TITLE) as demo:
         harness_btn.click(run_harness_ui, [text_state, replicates, seed], [harness_summary, harness_raw])
 
     with gr.Tab("3 · Unit discovery"):
-        gr.Markdown("Exploratory in-sample BPE is shown separately from the reportable leave-one-quire-out scale curve.")
+        gr.Markdown(
+            "Exploratory in-sample stream BPE is shown separately from the reportable leave-one-quire-out curve. "
+            "The cross-fit path uses the paper's P-locus cleaner and learns merges only inside conventional tokens."
+        )
         merges = gr.Slider(0, 128, value=32, step=1, label="Exploratory merge operations")
         bpe_btn = gr.Button("Run exploratory BPE")
         bpe_history = gr.Dataframe(label="Merge history", interactive=False)
@@ -221,9 +313,9 @@ with gr.Blocks(title=APP_TITLE) as demo:
             bpe_len = gr.Number(label="Sequence length", interactive=False)
             bpe_types = gr.Number(label="Distinct units", interactive=False)
         bpe_btn.click(run_bpe_ui, [text_state, merges], [bpe_history, bpe_preview, bpe_len, bpe_types])
-        gr.Markdown("#### Leave-one-quire-out BPE scale selection (0/16/32/64 merges)")
-        crossfit_btn = gr.Button("Run cross-fit BPE scale curve")
-        crossfit_table = gr.Dataframe(label="Held-out dependence gap by scale", interactive=False)
+        gr.Markdown("#### Published-method leave-one-quire-out BPE scale selection (0/16/32/64 merges)")
+        crossfit_btn = gr.Button("Run paper-exact cross-fit BPE scale curve")
+        crossfit_table = gr.Dataframe(label="Held-out unit-scale statistics", interactive=False)
         crossfit_selected = gr.Textbox(label="Selected held-out scale", interactive=False)
         crossfit_btn.click(run_bpe_crossfit_ui, raw_state, [crossfit_table, crossfit_selected])
 
@@ -249,7 +341,11 @@ with gr.Blocks(title=APP_TITLE) as demo:
         be_table = gr.Dataframe(label="Block entropy", interactive=False)
         fluct_table = gr.Dataframe(label="DFA-style fluctuation", interactive=False)
         alpha_text = gr.Textbox(label="DFA note", interactive=False)
-        longrange_btn.click(run_longrange_ui, [text_state, max_lag, mi_perms, dfa_min, dfa_max, dfa_steps], [mi_table, be_table, fluct_table, alpha_text])
+        longrange_btn.click(
+            run_longrange_ui,
+            [text_state, max_lag, mi_perms, dfa_min, dfa_max, dfa_steps],
+            [mi_table, be_table, fluct_table, alpha_text],
+        )
 
     with gr.Tab("6 · Adversarial validation"):
         gr.Markdown("Layer 1 uses an empirically calibrated global max-statistic plus feature-wise Holm correction. Layer 2 uses contiguous group holdouts rather than random neighboring-block splits.")
@@ -267,14 +363,36 @@ with gr.Blocks(title=APP_TITLE) as demo:
             disc_seed = gr.Number(value=0, precision=0, label="Seed")
         discriminator_btn = gr.Button("Run layer 2 grouped classifier test")
         discriminator_result = gr.Textbox(label="Group-aware held-out AUC", lines=6, interactive=False)
-        discriminator_btn.click(run_discriminator_ui, [text_state, gen_choice, disc_block, disc_reps, disc_seed], discriminator_result)
+        discriminator_btn.click(
+            run_discriminator_ui,
+            [text_state, gen_choice, disc_block, disc_reps, disc_seed],
+            discriminator_result,
+        )
 
     with gr.Tab("7 · Replication gate"):
-        gr.Markdown("Only verified targets are kept here. The earlier unverified 20.3% uncertain-separator crossing figure was removed. Example: `{\"char_conditional_entropy_bits\": 2.69, \"cross_boundary_edge_mi_bits\": 0.197, \"bpe_crossfit_selected_merges\": 32}`")
-        observed_json = gr.Textbox(label="Observed metrics (JSON)", lines=5)
+        gr.Markdown(
+            "The automatic path reproduces the published preprocessing rather than reusing the generic descriptive stream: "
+            "entropy, unit-scale BPE, and edge/order statistics each use their own paper-specific corpus contract. "
+            "The separator-crossing target remains manual until its erased-space BPE checkpoint is explicitly identified."
+        )
         tolerance = gr.Slider(0.01, 0.50, value=0.10, step=0.01, label="Relative tolerance for point targets")
-        replication_btn = gr.Button("Compare to verified targets")
-        replication_table = gr.Dataframe(label="Replication gate", interactive=False)
+        auto_replication_btn = gr.Button("Run automatic Rozanova/Temerev replication", variant="primary")
+        auto_observed = gr.Code(label="Automatically computed observed metrics", language="json")
+        auto_diagnostics = gr.Code(label="Method diagnostics", language="json")
+        auto_replication_table = gr.Dataframe(label="Automatic replication gate", interactive=False)
+        auto_replication_btn.click(
+            run_automatic_replication_ui,
+            [raw_state, tolerance],
+            [auto_observed, auto_diagnostics, auto_replication_table],
+        )
+        gr.Markdown("#### Manual target comparison\nUse this for independently computed metrics or targets not yet automated.")
+        observed_json = gr.Textbox(
+            label="Observed metrics (JSON)",
+            lines=5,
+            placeholder='{"end_to_start_flow_proportion": 0.806}',
+        )
+        replication_btn = gr.Button("Compare supplied values to verified targets")
+        replication_table = gr.Dataframe(label="Manual replication gate", interactive=False)
         replication_btn.click(run_replication_ui, [observed_json, tolerance], replication_table)
 
     with gr.Tab("8 · Optional ZeroGPU probe"):
