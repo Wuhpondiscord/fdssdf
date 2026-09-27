@@ -22,6 +22,7 @@ RAW = """#=IVTFF Eva- 2.0
 <f1r.3,@P0;U> a'b.cd
 <f1r.4,@P0;U> bad?.ok
 <f1r.5,@P0;U> qok[e:a]dy.daiin
+<f1r.6,&P0;U> ampersand.only
 <f2r> <! $Q=B $P=A $I=T $L=B $H=2 >
 <f2r.1,@P0;U> chedy.qokeedy.daiin
 <f2r.2,@P0;U> shol,shory.qokedy
@@ -35,6 +36,7 @@ def test_composite_collapse_matches_public_substitution_order():
 def test_entropy_corpus_is_p_only_but_keeps_apostrophe_path():
     tokens = entropy_corpus_tokens(RAW)
     assert "label" not in tokens and "shouldnot" not in tokens
+    assert "ampersand" not in tokens and "only" not in tokens
     assert "a'b" in tokens
     assert "bad?" not in tokens and "ok" in tokens
     assert "qokedy" in tokens
@@ -48,6 +50,7 @@ def test_unit_scale_cleaner_uses_p_loci_and_skips_bad_pieces_individually():
     assert "ab" in flat_a and "a'b" not in flat_a
     assert "bad?" not in flat_a and "ok" in flat_a
     assert "qokedy" in flat_a
+    assert "ampersand" in flat_a and "only" in flat_a
 
 
 def test_strict_space_cleaner_rejects_whole_line_when_a_piece_is_invalid():
@@ -56,6 +59,7 @@ def test_strict_space_cleaner_rejects_whole_line_when_a_piece_is_invalid():
     assert ["bad?", "ok"] not in token_lines
     assert not any("ok" in line and len(line) == 1 for line in token_lines)
     assert any(line == ["ab", "cd"] for line in token_lines)
+    assert any(line == ["ampersand", "only"] for line in token_lines)
     assert all(len(record["tokens"]) >= 2 for record in records)
 
 
