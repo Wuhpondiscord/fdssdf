@@ -249,14 +249,11 @@ def run_automatic_replication_ui(raw_text: str, tolerance: float):
     rows = compare_to_targets(observed, tolerance=float(tolerance))
     note = {
         "method": "Rozanova & Temerev public reproduction conventions",
-        "shuffle_count": 100,
+        "order_shuffles": 100,
+        "edge_order_rng_seed": 20260816,
+        "token_order_rng_seed": 20260810,
+        "separator_crossing_bpe_merges": 64,
         "auto_scored_targets": sorted(observed),
-        "not_auto_scored": {
-            "certain_separator_unit_crossing_rate": (
-                "The public driver reports erased-space crossing at 32, 64, and 128 merges, "
-                "but the 2.5% target citation does not yet identify which checkpoint to compare."
-            )
-        },
         "diagnostics": diagnostics,
     }
     return json.dumps(observed, indent=2, sort_keys=True), json.dumps(note, indent=2, sort_keys=True), pd.DataFrame(rows)
@@ -371,9 +368,8 @@ with gr.Blocks(title=APP_TITLE) as demo:
 
     with gr.Tab("7 · Replication gate"):
         gr.Markdown(
-            "The automatic path reproduces the published preprocessing rather than reusing the generic descriptive stream: "
-            "entropy, unit-scale BPE, and edge/order statistics each use their own paper-specific corpus contract. "
-            "The separator-crossing target remains manual until its erased-space BPE checkpoint is explicitly identified."
+            "The automatic path reproduces the published preprocessing rather than reusing the generic descriptive stream. "
+            "Entropy, within-token cross-fit BPE, edge/order statistics, and the 64-merge erased-space separator-crossing analysis each use their own paper-specific corpus/null contract."
         )
         tolerance = gr.Slider(0.01, 0.50, value=0.10, step=0.01, label="Relative tolerance for point targets")
         auto_replication_btn = gr.Button("Run automatic Rozanova/Temerev replication", variant="primary")
@@ -385,7 +381,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
             [raw_state, tolerance],
             [auto_observed, auto_diagnostics, auto_replication_table],
         )
-        gr.Markdown("#### Manual target comparison\nUse this for independently computed metrics or targets not yet automated.")
+        gr.Markdown("#### Manual target comparison\nUse this for independently computed metrics or literature targets not implemented by the automatic Rozanova/Temerev path, including the separate Parisel statistics.")
         observed_json = gr.Textbox(
             label="Observed metrics (JSON)",
             lines=5,
