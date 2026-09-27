@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
 
 from voynich_lab.gpu_probe import gpu_cooccurrence_probe
 from voynich_lab.harness import run_harness
-from voynich_lab.hf_sync import configured_space, push_snapshot, sync_status
+from voynich_lab.hf_sync import configured_space_value, push_snapshot, sync_status
 from voynich_lab.metrics import compute_metrics, normalize_text, positional_entropy_by_decile
 from voynich_lab.segmentation import discover_bpe_units
 
@@ -60,9 +60,9 @@ def run_gpu_ui(text: str, window: int, max_symbols: int):
     return json.dumps(result, indent=2), table
 
 
-def push_ui(repo_id: str):
+def push_ui(target: str):
     try:
-        return push_snapshot(repo_id)
+        return push_snapshot(target)
     except Exception as exc:
         raise gr.Error(str(exc)) from exc
 
@@ -116,13 +116,13 @@ with gr.Blocks(title=APP_TITLE) as demo:
 
     with gr.Tab("5 · Hugging Face sync"):
         gr.Markdown("GitHub `main` is the source of truth. The workflow mirrors pushes to Hugging Face. This button is a recovery path.")
-        hf_repo = gr.Textbox(label="HF Space repo", value=configured_space())
+        hf_target = gr.Textbox(label="HF Space URL or repo", value=configured_space_value())
         sync_check = gr.Button("Check sync configuration")
-        sync_info = gr.Textbox(label="Configuration", lines=4, interactive=False)
+        sync_info = gr.Textbox(label="Configuration", lines=5, interactive=False)
         sync_check.click(sync_status, outputs=sync_info)
         push_btn = gr.Button("Push current snapshot to Hugging Face")
         push_result = gr.Textbox(label="Push result", lines=4, interactive=False)
-        push_btn.click(push_ui, hf_repo, push_result)
+        push_btn.click(push_ui, hf_target, push_result)
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=2).launch()
