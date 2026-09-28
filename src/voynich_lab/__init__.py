@@ -16,4 +16,12 @@ __all__ = [
     "currier",
     "currier_linestart",
     "currier_report",
+    "generators",
+    "selfcitation",
+    "selfcitation_canfollow",
+    "selfcitation_chooser",
+    "selfcitation_morph",
+    "selfcitation_slim",
+    "selfcitation_statistics",
+    "selfcitation_generator",
 ]
