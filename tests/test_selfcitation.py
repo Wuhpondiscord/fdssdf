@@ -83,7 +83,7 @@ def test_selfcitation_config_rejects_invalid_morph_mix():
 def test_java_string_hash_code_known_values():
     assert java_string_hash_code("") == 0
     assert java_string_hash_code("abc") == 96354
-    assert java_string_hash_code("qotchedy") == -1502474739
+    assert java_string_hash_code("qotchedy") == -1781625633
 
 
 def test_ligature_parser_preserves_upstream_hashmap_scan_behavior():
