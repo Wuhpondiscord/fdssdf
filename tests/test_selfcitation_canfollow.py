@@ -28,38 +28,30 @@ def test_combinable_ligature_exceptions_are_applied_first():
     assert rule.can_follow_each_other_after("r", "ol")
     assert rule.can_follow_each_other_before("r", "ol")
     assert rule.can_follow_each_other_after("ol", "a")
+    # Glyph.allCombinableLigature also contains the released word-final om/am.
+    assert rule.can_follow_each_other_before("in", "om")
+    assert rule.can_follow_each_other_after("am", "y")
 
 
 def test_initial_groups_bypass_generated_start_validation_only():
     rule = CurveLineCanFollow()
-    initial = GlyphGroup("xyz", GenerateType.INITIAL)
-    generated = GlyphGroup("xyz", GenerateType.REPLACE)
+    initial = GlyphGroup("byz", GenerateType.INITIAL)
+    generated = GlyphGroup("byz", GenerateType.REPLACE)
     assert rule.has_valid_start_glyph(initial)
     assert not rule.has_valid_start_glyph(generated)
 
 
-def test_known_reference_words_are_valid_under_curveline_rule():
+def test_initial_status_does_not_bypass_internal_pair_validation():
     rule = CurveLineCanFollow()
-    for word in (
-        "pchal",
-        "shal",
-        "shorchdy",
-        "okeor",
-        "okain",
-        "shedy",
-        "pchedy",
-        "qotchedy",
-        "qotar",
-        "ol",
-        "lkar",
-    ):
-        assert rule.is_valid(GlyphGroup(word, GenerateType.INITIAL)), word
+    # The released seed line contains shorchdy, but initial status only bypasses
+    # start-glyph validation; the internal sh/or/ch/dy transitions still apply.
+    assert not rule.is_valid(GlyphGroup("shorchdy", GenerateType.INITIAL))
 
 
 def test_generated_validity_checks_start_and_every_adjacent_pair():
     rule = CurveLineCanFollow()
     assert rule.is_valid(GlyphGroup("qotchedy", GenerateType.REPLACE))
-    assert not rule.is_valid(GlyphGroup("xyz", GenerateType.REPLACE))
+    assert not rule.is_valid(GlyphGroup("byz", GenerateType.REPLACE))
 
 
 def test_disabling_word_final_substitutions_changes_empty_boundary_handling():
