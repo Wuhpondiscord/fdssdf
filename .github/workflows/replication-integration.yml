@@ -7,14 +7,18 @@ on:
       - "src/voynich_lab/published_replication.py"
       - "src/voynich_lab/segmentation.py"
       - "src/voynich_lab/replication_targets.py"
+      - "src/voynich_lab/currier.py"
       - "tests/test_published_replication.py"
+      - "tests/test_currier.py"
       - ".github/workflows/replication-integration.yml"
   pull_request:
     paths:
       - "src/voynich_lab/published_replication.py"
       - "src/voynich_lab/segmentation.py"
       - "src/voynich_lab/replication_targets.py"
+      - "src/voynich_lab/currier.py"
       - "tests/test_published_replication.py"
+      - "tests/test_currier.py"
       - ".github/workflows/replication-integration.yml"
   workflow_dispatch:
 
@@ -49,6 +53,7 @@ jobs:
           import json
           from pathlib import Path
 
+          from voynich_lab.currier import currier_boundary_profiles
           from voynich_lab.published_replication import automatic_replication_metrics
 
           raw = Path("/tmp/ZL3b.txt").read_text(encoding="utf-8", errors="replace")
@@ -89,4 +94,33 @@ jobs:
               got = rows[merges]["glyph_weighted_dependence_gap_bits"]
               assert abs(got - expected) <= 0.005, (merges, got, expected)
           assert diagnostics["bpe_selected_merges"] == 32
+
+          currier = currier_boundary_profiles(raw)
+          print("CURRIER")
+          print(json.dumps(currier, indent=2, sort_keys=True))
+          A = currier["profiles"]["A"]
+          B = currier["profiles"]["B"]
+          expected_A = {
+              "uncertain": 0.494,
+              "first": 0.104,
+              "mid": 0.125,
+              "certain": 0.094,
+              "linebreak": -0.010,
+          }
+          expected_B = {
+              "uncertain": 0.503,
+              "first": 0.069,
+              "mid": 0.037,
+              "certain": -0.003,
+              "linebreak": -0.044,
+          }
+          for key, expected in expected_A.items():
+              assert abs(A["index"][key] - expected) <= 0.003, ("A", key, A["index"][key], expected)
+          for key, expected in expected_B.items():
+              assert abs(B["index"][key] - expected) <= 0.003, ("B", key, B["index"][key], expected)
+          assert abs(currier["A_minus_B_index"]["uncertain"] - (-0.009)) <= 0.004
+          assert abs(A["uncertain_rate"] - 0.088) <= 0.002
+          assert abs(B["uncertain_rate"] - 0.080) <= 0.002
+          assert abs(A["raw_gap_bits"] - 1.53) <= 0.03
+          assert abs(B["raw_gap_bits"] - 2.52) <= 0.03
           PY
