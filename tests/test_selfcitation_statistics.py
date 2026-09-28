@@ -66,7 +66,7 @@ def test_remember_tracks_types_and_repeat_counters():
     assert helper.repeated_tokens_dy == 0
     assert helper.repeated_tokens_ol == 1
 
-    helper.remember(GlyphGroup("qotar"))
+    helper.remember(GlyphGroup("qok"))
     assert helper.repeated_tokens_ol == 0
     assert helper.repeated_tokens_unknown == 1
 
