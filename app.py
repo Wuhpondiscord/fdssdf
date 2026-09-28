@@ -13,6 +13,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from voynich_lab.currier_report import build_currier_report
 from voynich_lab.discriminator import classifier_two_sample_test
 from voynich_lab.gpu_probe import gpu_cooccurrence_probe
 from voynich_lab.harness import run_harness
@@ -161,6 +162,28 @@ def run_ivtff_ui(raw_text: str):
         ]
     )
     return summary, preview, page_meta
+
+
+def run_currier_ui(raw_text: str, bootstrap_repetitions: int, seed: int):
+    if not raw_text.strip() or not is_ivtff(raw_text):
+        raise gr.Error("Currier analysis requires IVTFF input with native $L and $Q metadata.")
+    try:
+        report = build_currier_report(
+            raw_text,
+            boundary_bootstrap_repetitions=int(bootstrap_repetitions),
+            seed=int(seed),
+        )
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    return (
+        pd.DataFrame(report["boundary_rows"]),
+        pd.DataFrame(report["stratum_rows"]),
+        pd.DataFrame(report["bootstrap_rows"]),
+        report["interpretation"],
+        pd.DataFrame(report["line_start_jsd_rows"]),
+        pd.DataFrame(report["line_start_enrichment_rows"]),
+        json.dumps(report["provenance"], indent=2, sort_keys=True),
+    )
 
 
 # Every generator exposed to scorecard/discriminator obeys the same
@@ -346,7 +369,43 @@ with gr.Blocks(title=APP_TITLE) as demo:
         page_meta = gr.Dataframe(label="Page metadata", interactive=False)
         ivtff_btn.click(run_ivtff_ui, raw_state, [ivtff_summary, ivtff_preview, page_meta])
 
-    with gr.Tab("5 · Long-range structure"):
+    with gr.Tab("5 · Currier A/B"):
+        gr.Markdown(
+            "Currier A/B boundary profiles use separate within-stratum PMI scales. "
+            "A−B uncertainty is resampled by native quire under both independent-stratum and joint-quire schemes; "
+            "do not treat a pooled A/B point difference as an independent dialect effect."
+        )
+        with gr.Row():
+            currier_bootstrap = gr.Slider(20, 1500, value=200, step=20, label="Quire bootstrap draws")
+            currier_seed = gr.Number(value=20260808, precision=0, label="Seed")
+        currier_btn = gr.Button("Run Currier A/B analysis", variant="primary")
+        currier_boundary = gr.Dataframe(label="Boundary profiles: stratum-local indices", interactive=False)
+        currier_strata = gr.Dataframe(label="Currier stratum summary", interactive=False)
+        currier_bootstrap_table = gr.Dataframe(label="A−B quire-bootstrap intervals", interactive=False)
+        currier_interpretation = gr.Textbox(label="Interpretation", lines=5, interactive=False)
+        gr.Markdown(
+            "#### Line-start executable reproduction vs bundled STATED constants\n"
+            "These tables reproduce the authors' pinned final executable. They deliberately show its output next to the "
+            "same upstream file's older hard-coded STATED constants rather than forcing one to match the other."
+        )
+        currier_jsd = gr.Dataframe(label="Line-start JSD: executable vs STATED", interactive=False)
+        currier_enrichment = gr.Dataframe(label="Line-start enrichment: executable vs STATED", interactive=False)
+        currier_provenance = gr.Code(label="Method provenance", language="json")
+        currier_btn.click(
+            run_currier_ui,
+            [raw_state, currier_bootstrap, currier_seed],
+            [
+                currier_boundary,
+                currier_strata,
+                currier_bootstrap_table,
+                currier_interpretation,
+                currier_jsd,
+                currier_enrichment,
+                currier_provenance,
+            ],
+        )
+
+    with gr.Tab("6 · Long-range structure"):
         gr.Markdown("Raw lagged MI is shown with a shuffled finite-sample baseline; the DFA-style exponent is descriptive and should be judged against matched nulls.")
         with gr.Row():
             max_lag = gr.Slider(2, 50, value=20, step=1, label="Max lag")
@@ -366,7 +425,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
             [mi_table, be_table, fluct_table, alpha_text],
         )
 
-    with gr.Tab("6 · Adversarial validation"):
+    with gr.Tab("7 · Adversarial validation"):
         gr.Markdown("Layer 1 uses an empirically calibrated global max-statistic plus feature-wise Holm correction. Layer 2 uses contiguous group holdouts rather than random neighboring-block splits.")
         gen_choice = gr.Dropdown(list(GENERATOR_CHOICES), value="N1 order-1 Markov (layout fixed)", label="Candidate generator")
         with gr.Row():
@@ -388,7 +447,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
             discriminator_result,
         )
 
-    with gr.Tab("7 · Replication gate"):
+    with gr.Tab("8 · Replication gate"):
         gr.Markdown(
             "The automatic path reproduces the published preprocessing rather than reusing the generic descriptive stream. "
             "Entropy, within-token cross-fit BPE, edge/order statistics, and the 64-merge erased-space separator-crossing analysis each use their own paper-specific corpus/null contract."
@@ -414,7 +473,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
         replication_table = gr.Dataframe(label="Manual replication gate", interactive=False)
         replication_btn.click(run_replication_ui, [observed_json, tolerance], replication_table)
 
-    with gr.Tab("8 · Optional ZeroGPU probe"):
+    with gr.Tab("9 · Optional ZeroGPU probe"):
         gr.Markdown("This remains the only path that requests ZeroGPU. It is never invoked by loading, parsing, null generation, BPE, or the standard statistical tests.")
         with gr.Row():
             gpu_window = gr.Slider(1, 32, value=5, step=1, label="Context window")
@@ -424,7 +483,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
         gpu_table = gr.Dataframe(label="Glyph frequencies", interactive=False)
         gpu_btn.click(run_gpu_ui, [text_state, gpu_window, gpu_max], [gpu_json, gpu_table])
 
-    with gr.Tab("9 · Hugging Face sync"):
+    with gr.Tab("10 · Hugging Face sync"):
         gr.Markdown("GitHub `main` remains the source of truth. The workflow mirrors pushes to Hugging Face; this button is a recovery path.")
         hf_target = gr.Textbox(label="HF Space URL or repo", value=configured_space_value())
         sync_check = gr.Button("Check sync configuration")
