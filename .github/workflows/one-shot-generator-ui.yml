@@ -1,0 +1,156 @@
+name: One-shot generator UI patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-generator-ui.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Patch app and README with guarded replacements
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app_path = Path('app.py')
+          app = app_path.read_text(encoding='utf-8')
+
+          import_marker = 'from voynich_lab.currier_report import build_currier_report\n'
+          import_block = (
+              'from voynich_lab.currier_report import build_currier_report\n'
+              'from voynich_lab.generator_adapters import SELFCITATION_ADAPTER_NAME, selfcitation_reference_matched\n'
+              'from voynich_lab.generators import generate_naibbe\n'
+              'from voynich_lab.selfcitation import SelfCitationConfig\n'
+              'from voynich_lab.selfcitation_generator import generate_selfcitation\n'
+          )
+          assert app.count(import_marker) == 1, 'app import marker drifted'
+          app = app.replace(import_marker, import_block, 1)
+
+          function_marker = '# Every generator exposed to scorecard/discriminator obeys the same\n'
+          function_block = '''def run_naibbe_generator_ui(plaintext: str, seed: int):
+              if not plaintext.strip():
+                  raise gr.Error("Naibbe requires meaningful plaintext input.")
+              result = generate_naibbe(plaintext, seed=int(seed))
+              return (
+                  result.ciphertext,
+                  result.canonical_ciphertext,
+                  result.respaced_plaintext,
+                  json.dumps(result.provenance, indent=2, sort_keys=True),
+              )
+
+
+          def run_selfcitation_generator_ui(lines: int, seed: int):
+              line_count = int(lines)
+              config = SelfCitationConfig(lines_to_create=line_count, random_seed=int(seed))
+              result = generate_selfcitation(config, lines_to_create=line_count)
+              summary = {
+                  "generated_lines": len(result.lines),
+                  "generated_characters": len(result.text),
+                  "seed": int(seed),
+                  "provenance": result.provenance,
+              }
+              return result.text, json.dumps(summary, indent=2, sort_keys=True)
+
+
+          '''
+          assert app.count(function_marker) == 1, 'function insertion marker drifted'
+          app = app.replace(function_marker, function_block + function_marker, 1)
+
+          choice_marker = '    "N6 position-conditioned Markov": lambda t, seed: position_conditioned_markov_surrogate(t, n_bins=10, seed=seed),\n}'
+          choice_replacement = (
+              '    "N6 position-conditioned Markov": lambda t, seed: position_conditioned_markov_surrogate(t, n_bins=10, seed=seed),\n'
+              '    SELFCITATION_ADAPTER_NAME: selfcitation_reference_matched,\n'
+              '}'
+          )
+          assert app.count(choice_marker) == 1, 'generator choice marker drifted'
+          app = app.replace(choice_marker, choice_replacement, 1)
+
+          tab_marker = '    with gr.Tab("9 · Optional ZeroGPU probe"):\n'
+          generator_tab = '''    with gr.Tab("9 · Generator baselines"):
+              gr.Markdown(
+                  "Validated hypothesis generators are kept separate from the N0–N6 null ladder. "
+                  "Naibbe consumes meaningful plaintext; self-citation generates meaningless-but-structured pseudotext."
+              )
+              with gr.Tab("Self-citation pseudotext"):
+                  with gr.Row():
+                      sc_gen_lines = gr.Slider(2, 1200, value=120, step=1, label="Lines to generate")
+                      sc_gen_seed = gr.Number(value=19, precision=0, label="Pseudo-RNG seed")
+                  sc_gen_btn = gr.Button("Generate self-citation baseline", variant="primary")
+                  sc_gen_text = gr.Textbox(label="Generated pseudotext", lines=14, interactive=False)
+                  sc_gen_meta = gr.Code(label="Generation provenance", language="json")
+                  sc_gen_btn.click(
+                      run_selfcitation_generator_ui,
+                      [sc_gen_lines, sc_gen_seed],
+                      [sc_gen_text, sc_gen_meta],
+                  )
+                  gr.Markdown(
+                      "The adversarial-validation dropdown also includes a size-matched self-citation adapter. "
+                      "That adapter changes only the pseudo-RNG seed and requested line count; all other released settings remain canonical."
+                  )
+
+              with gr.Tab("Naibbe meaningful cipher"):
+                  naibbe_plaintext = gr.Textbox(
+                      label="Meaningful plaintext",
+                      lines=8,
+                      placeholder="Paste Latin, Italian, or other alphabetic plaintext to encrypt…",
+                  )
+                  naibbe_seed = gr.Number(value=0, precision=0, label="Seed")
+                  naibbe_btn = gr.Button("Generate Naibbe baseline")
+                  naibbe_cipher = gr.Textbox(label="Final ciphertext (3% output-space removal)", lines=10, interactive=False)
+                  naibbe_canonical = gr.Textbox(label="Canonical ciphertext before output-space removal", lines=10, interactive=False)
+                  naibbe_respaced = gr.Textbox(label="Respaced plaintext n-grams", lines=8, interactive=False)
+                  naibbe_meta = gr.Code(label="Generation provenance", language="json")
+                  naibbe_btn.click(
+                      run_naibbe_generator_ui,
+                      [naibbe_plaintext, naibbe_seed],
+                      [naibbe_cipher, naibbe_canonical, naibbe_respaced, naibbe_meta],
+                  )
+
+'''
+          assert app.count(tab_marker) == 1, 'tab insertion marker drifted'
+          app = app.replace(tab_marker, generator_tab + '    with gr.Tab("10 · Optional ZeroGPU probe"):\n', 1)
+          app = app.replace('    with gr.Tab("10 · Hugging Face sync"):\n', '    with gr.Tab("11 · Hugging Face sync"):\n', 1)
+          app_path.write_text(app, encoding='utf-8')
+
+          readme_path = Path('README.md')
+          readme = readme_path.read_text(encoding='utf-8')
+          naibbe_bullet = '- **Naibbe meaningful-cipher baseline** (`generators.py`): the paper-facing 52-card `naibbe.py` algorithm, exact 414-row substitution table, isolated seeded RNG, and provenance metadata. CI compares seeded plaintext respacing, canonical ciphertext, final 3%-space-dropped ciphertext, and ambiguity retry count directly against the pinned original implementation.\n'
+          selfcitation_bullet = '- **Timm/Schinner self-citation pseudotext baseline** (`selfcitation_*.py`): the released Java generator is ported through RNG, glyph parsing, can-follow rules, source choice, statistics, slim morphing, and full generator orchestration. Dedicated CI gates compare the Python port against the pinned upstream Java implementation.\n'
+          assert readme.count(naibbe_bullet) == 1, 'README Naibbe bullet drifted'
+          if selfcitation_bullet not in readme:
+              readme = readme.replace(naibbe_bullet, naibbe_bullet + selfcitation_bullet, 1)
+
+          old_gap = '1. **Generator library.** The paper-facing Naibbe 52-card baseline is implemented and source-equivalence-checked, and it remains explicitly classified as a meaningful-plaintext cipher rather than a null surrogate. The remaining generator gaps are the Timm/Schinner self-citation pseudotext family and a reproducible Rugg-style grille-cipher implementation; for both, prefer original authors\' released code/data over prose-only approximations and preserve the meaningful-cipher versus meaningless-pseudotext distinction.\n'
+          new_gap = '1. **Generator library.** The paper-facing Naibbe 52-card meaningful-cipher baseline and the Timm/Schinner meaningless self-citation pseudotext family are both implemented and source-equivalence-checked. The remaining major generator gap is a reproducible Rugg-style grille-cipher implementation sourced from original released code/data rather than a prose-only approximation.\n'
+          assert readme.count(old_gap) == 1, 'README generator-gap marker drifted'
+          readme = readme.replace(old_gap, new_gap, 1)
+          readme_path.write_text(readme, encoding='utf-8')
+          PY
+
+          python -m py_compile app.py src/voynich_lab/generator_adapters.py src/voynich_lab/selfcitation_generator.py
+
+          git diff --check
+          git diff -- app.py README.md
+
+      - name: Commit generated patch
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- app.py README.md; then
+            echo "No changes required"
+            exit 0
+          fi
+          git config user.name "Wuhp"
+          git config user.email "130805430+Wuhpondiscord@users.noreply.github.com"
+          git add app.py README.md
+          git commit -m "Expose validated generator baselines in Gradio"
+          git push origin HEAD:main
