@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import gradio as gr
 
 import legacy_app as legacy
+from voynich_lab.full_pipeline import (
+    pipeline_summary_markdown,
+    profile_names,
+    run_full_pipeline,
+)
 from voynich_lab.transcript_catalog import (
     DEFAULT_PRESET,
     IVTFF_EXAMPLE,
@@ -43,6 +49,29 @@ def load_custom_ui(file_path: str | None, pasted: str):
 
 def preset_info_ui(name: str):
     return preset_description(name)
+
+
+def run_full_pipeline_ui(raw_text: str, analysis_text: str, profile: str, seed: int):
+    if not analysis_text.strip():
+        raise gr.Error("Load a transcript before running the full pipeline.")
+    try:
+        report = run_full_pipeline(
+            raw_text,
+            analysis_text,
+            profile=str(profile),
+            seed=int(seed),
+        )
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    rows = [
+        [row["stage"], row["status"], row["seconds"], row["detail"]]
+        for row in report.get("stages", [])
+    ]
+    status = (
+        f"Pipeline finished: {report.get('completed_stages', 0)} completed, "
+        f"{report.get('skipped_stages', 0)} skipped, {report.get('error_stages', 0)} errors."
+    )
+    return status, rows, pipeline_summary_markdown(report), json.dumps(report, indent=2, sort_keys=True)
 
 
 FORMAT_HELP = f"""
@@ -110,6 +139,33 @@ with gr.Blocks(title=APP_TITLE) as demo:
             interactive=False,
         )
 
+    with gr.Group():
+        gr.Markdown("## Run the full pipeline")
+        gr.Markdown(
+            "One click runs the main analysis stack in sequence. IVTFF-only stages are included when metadata is "
+            "available and skipped cleanly for plain text. Individual stage failures do not stop later stages. "
+            "ZeroGPU, generator playgrounds, and Hugging Face sync remain manual by design."
+        )
+        with gr.Row():
+            pipeline_profile = gr.Dropdown(
+                choices=profile_names(),
+                value="Standard",
+                label="Pipeline profile",
+                info="Quick is best for previews; Standard is the default; Thorough increases Monte Carlo/bootstrap depth.",
+            )
+            pipeline_seed = gr.Number(value=0, precision=0, label="Pipeline seed")
+            pipeline_btn = gr.Button("Run full pipeline", variant="primary")
+        pipeline_status = gr.Textbox(label="Pipeline status", interactive=False)
+        pipeline_summary = gr.Markdown()
+        pipeline_stages = gr.Dataframe(
+            headers=["stage", "status", "seconds", "detail"],
+            datatype=["str", "str", "number", "str"],
+            label="Stage status",
+            interactive=False,
+        )
+        with gr.Accordion("Full pipeline JSON report", open=False):
+            pipeline_json = gr.Code(language="json", label="Detailed results")
+
     gr.Markdown("---\n## Analysis workspace")
     legacy.demo.render()
 
@@ -124,6 +180,11 @@ with gr.Blocks(title=APP_TITLE) as demo:
     load_builtin.click(load_builtin_ui, preset, source_outputs)
     load_custom.click(load_custom_ui, [upload, pasted], source_outputs)
     preset.change(preset_info_ui, preset, preset_info, queue=False)
+    pipeline_btn.click(
+        run_full_pipeline_ui,
+        [legacy.raw_state, legacy.text_state, pipeline_profile, pipeline_seed],
+        [pipeline_status, pipeline_stages, pipeline_summary, pipeline_json],
+    )
     demo.load(load_builtin_ui, preset, source_outputs, queue=False)
 
 
