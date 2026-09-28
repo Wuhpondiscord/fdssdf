@@ -1,0 +1,285 @@
+name: Self-citation Generator Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "src/voynich_lab/selfcitation_canfollow.py"
+      - "src/voynich_lab/selfcitation_chooser.py"
+      - "src/voynich_lab/selfcitation_morph.py"
+      - "src/voynich_lab/selfcitation_slim.py"
+      - "src/voynich_lab/selfcitation_statistics.py"
+      - "src/voynich_lab/selfcitation_generator.py"
+      - "tests/test_selfcitation_generator.py"
+      - ".github/workflows/selfcitation-generator-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  generator-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream generator dependencies
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          root=/tmp/generator/de/voynich/text
+          mkdir -p "$root/morph" "$root/canfollow" "$root/sourcechooser" "$root/util/random" "$root/util"
+
+          for file in SelfCitationTextGenerator.java Glyph.java GlyphGroup.java Substitution.java StatisticHelper.java Constants.java; do
+            curl -fsSL "${base}/de/voynich/text/${file}" -o "$root/${file}"
+          done
+          for file in Converter.java StringUtil.java; do
+            curl -fsSL "${base}/de/voynich/text/util/${file}" -o "$root/util/${file}"
+          done
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o "$root/util/random/I_RandomNumberGenerator.java"
+          for file in I_CanFollow.java CurveLineCanFollow.java; do
+            curl -fsSL "${base}/de/voynich/text/canfollow/${file}" -o "$root/canfollow/${file}"
+          done
+          for file in ChooserHelper.java I_SourceGroupChooser.java PageSourceGroupChooser.java; do
+            curl -fsSL "${base}/de/voynich/text/sourcechooser/${file}" -o "$root/sourcechooser/${file}"
+          done
+          for file in I_GroupMorpher.java AbstractBaseGroupMorpher.java SlimGroupMorpher.java; do
+            curl -fsSL "${base}/de/voynich/text/morph/${file}" -o "$root/morph/${file}"
+          done
+
+      - name: Add released-config stub and full Java generator probe
+        run: |
+          set -euo pipefail
+          root=/tmp/generator/de/voynich/text
+
+          cat > "$root/util/Config.java" <<'JAVA'
+          package de.voynich.text.util;
+
+          import de.voynich.text.*;
+          import de.voynich.text.canfollow.*;
+          import de.voynich.text.morph.*;
+          import de.voynich.text.sourcechooser.*;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          import java.util.List;
+
+          public class Config {
+              public static boolean useWordFinalSubstitutions = true;
+              public static int methodReuseLastProbability = 10;
+              public static int methodCombinedGroupsDismissAsSourceProbability = 30;
+              public static int methodSourceChooserSamePositionProbability = 28;
+              public static float I_MIN_PERCENTAGE = 0.20f;
+              public static float OL_MIN_PERCENTAGE = 0.25f;
+              public static float DY_MIN_PERCENTAGE = 0.25f;
+              public static int maxLineLength = 55;
+              public static int minLineLength = 15;
+
+              public int linesToCreate = 20;
+              public int pageLength = 29;
+              public int maxRepeatCount = 3;
+              public int randomSeed = 19;
+              public String[] initialLines = {
+                  "pchal shal shorchdy okeor okain shedy pchedy qotchedy qotar ol lkar"
+              };
+              public SelfCitationTextGenerator.CURRIER currierType = SelfCitationTextGenerator.CURRIER.B;
+              public I_RandomNumberGenerator randomNumberGenerator;
+              public I_CanFollow canFollow;
+              public StatisticHelper statistics;
+              public I_SourceGroupChooser sourceGroupChooser;
+              public I_GroupMorpher groupMorpher;
+
+              public Config() {}
+
+              public void setRandomSeed(int seed) {
+                  randomSeed = seed;
+              }
+
+              public void init() {
+                  canFollow = new CurveLineCanFollow();
+                  statistics = new StatisticHelper(
+                      currierType,
+                      randomNumberGenerator,
+                      canFollow,
+                      StatisticHelper.SUGGEST_METHOD.TOP_TOKEN,
+                      40
+                  );
+                  sourceGroupChooser = new PageSourceGroupChooser(randomNumberGenerator, currierType);
+                  groupMorpher = new SlimGroupMorpher(currierType, canFollow, 0);
+                  groupMorpher.setRandomNumberGenerator(randomNumberGenerator);
+                  groupMorpher.setProbabilities(20, 30);
+              }
+
+              public void saveGeneratedText(List<String> generatedText) {}
+          }
+          JAVA
+
+          cat > "$root/canfollow/VoynichCanFollow.java" <<'JAVA'
+          package de.voynich.text.canfollow;
+
+          import de.voynich.text.GlyphGroup;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+
+          public class VoynichCanFollow implements I_CanFollow {
+              public boolean canFollowEachOtherBefore(String a, String b, GlyphGroup g) { return false; }
+              public boolean canFollowEachOtherAfter(String a, String b, GlyphGroup g) { return false; }
+              public boolean canFollowToInitalGlyph(String a, String b, GlyphGroup g) { return false; }
+              public boolean isValid(GlyphGroup g) { return false; }
+              public boolean hasValidStartGlyph(GlyphGroup g) { return false; }
+              public GlyphGroup getGallowVariant(GlyphGroup g, I_RandomNumberGenerator r) { return g; }
+          }
+          JAVA
+
+          cat > "$root/GeneratorParity.java" <<'JAVA'
+          package de.voynich.text;
+
+          import de.voynich.text.util.Config;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          import java.lang.reflect.*;
+          import java.util.*;
+          import sun.misc.Unsafe;
+
+          public class GeneratorParity {
+              static class TraceRandom implements I_RandomNumberGenerator {
+                  final Random random;
+                  final List<String> trace = new ArrayList<>();
+
+                  TraceRandom(long seed) {
+                      random = new Random(seed);
+                  }
+
+                  public int rand(int max) {
+                      int value = max == 0 ? 0 : random.nextInt(max);
+                      trace.add(max + "=" + value);
+                      return value;
+                  }
+
+                  String dump() {
+                      return String.join(",", trace);
+                  }
+              }
+
+              static Unsafe unsafe() throws Exception {
+                  Field field = Unsafe.class.getDeclaredField("theUnsafe");
+                  field.setAccessible(true);
+                  return (Unsafe) field.get(null);
+              }
+
+              static void setField(Object target, String name, Object value) throws Exception {
+                  Field field = target.getClass().getDeclaredField(name);
+                  field.setAccessible(true);
+                  field.set(target, value);
+              }
+
+              @SuppressWarnings("unchecked")
+              static <T> T getField(Object target, String name) throws Exception {
+                  Field field = target.getClass().getDeclaredField(name);
+                  field.setAccessible(true);
+                  return (T) field.get(target);
+              }
+
+              static void invoke(Object target, String name, Class<?>[] types, Object... args) throws Exception {
+                  Method method = target.getClass().getDeclaredMethod(name, types);
+                  method.setAccessible(true);
+                  method.invoke(target, args);
+              }
+
+              static void run(long seed, int linesToCreate) throws Exception {
+                  TraceRandom rng = new TraceRandom(seed);
+                  Config config = new Config();
+                  config.randomSeed = (int) seed;
+                  config.randomNumberGenerator = rng;
+                  config.linesToCreate = linesToCreate;
+
+                  SelfCitationTextGenerator generator =
+                      (SelfCitationTextGenerator) unsafe().allocateInstance(SelfCitationTextGenerator.class);
+                  setField(generator, "generatedText", new ArrayList<String>());
+                  setField(generator, "lineArrays", new ArrayList<List<GlyphGroup>>());
+                  setField(generator, "paragraphInitialLineArrays", new ArrayList<List<GlyphGroup>>());
+                  setField(generator, "config", config);
+
+                  invoke(generator, "initStatistics", new Class<?>[] {});
+                  invoke(
+                      generator,
+                      "generateText",
+                      new Class<?>[] {int.class, int.class},
+                      linesToCreate,
+                      config.initialLines.length
+                  );
+
+                  List<String> generated = getField(generator, "generatedText");
+                  System.out.println("BEGIN\t" + seed);
+                  for (int i = 0; i < generated.size(); i++) {
+                      System.out.println("L\t" + i + "\t" + generated.get(i));
+                  }
+                  System.out.println("TRACE\t" + rng.dump());
+                  System.out.println("END\t" + seed);
+              }
+
+              public static void main(String[] args) throws Exception {
+                  for (long seed : new long[] {0L, 1L, 7L, 19L}) {
+                      run(seed, 20);
+                  }
+              }
+          }
+          JAVA
+
+      - name: Compile and run pinned upstream generator
+        run: |
+          set -euo pipefail
+          javac $(find /tmp/generator -name '*.java' -print)
+          java -cp /tmp/generator de.voynich.text.GeneratorParity > /tmp/java_generator.tsv
+          wc -l /tmp/java_generator.tsv
+
+      - name: Run Python generator on identical seeds
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_generator.tsv
+          from dataclasses import replace
+          from voynich_lab.selfcitation import JavaRandom, canonical_selfcitation_config
+          from voynich_lab.selfcitation_generator import SelfCitationTextGenerator
+
+          class TraceRandom:
+              def __init__(self, seed):
+                  self.inner = JavaRandom(seed)
+                  self.trace = []
+
+              def rand(self, maximum):
+                  value = self.inner.rand(maximum)
+                  self.trace.append(f"{maximum}={value}")
+                  return value
+
+              def dump(self):
+                  return ",".join(self.trace)
+
+          for seed in (0, 1, 7, 19):
+              rng = TraceRandom(seed)
+              config = replace(
+                  canonical_selfcitation_config(),
+                  lines_to_create=20,
+                  random_seed=seed,
+              )
+              generator = SelfCitationTextGenerator(
+                  config,
+                  random_number_generator=rng,
+              )
+              generated = generator.generate(20).lines
+              print(f"BEGIN\t{seed}")
+              for index, line in enumerate(generated):
+                  print(f"L\t{index}\t{line}")
+              print(f"TRACE\t{rng.dump()}")
+              print(f"END\t{seed}")
+          PY
+          wc -l /tmp/python_generator.tsv
+
+      - name: Require byte-for-byte generated-line and RNG-trace parity
+        run: |
+          set -euo pipefail
+          diff -u /tmp/java_generator.tsv /tmp/python_generator.tsv
+          echo "Python SelfCitationTextGenerator matches pinned upstream Java across complete generated lines and RNG traces"
