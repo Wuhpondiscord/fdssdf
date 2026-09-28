@@ -17,6 +17,7 @@ __all__ = [
     "currier_linestart",
     "currier_report",
     "generators",
+    "generator_adapters",
     "selfcitation",
     "selfcitation_canfollow",
     "selfcitation_chooser",
