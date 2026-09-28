@@ -8,8 +8,10 @@ on:
       - "src/voynich_lab/segmentation.py"
       - "src/voynich_lab/replication_targets.py"
       - "src/voynich_lab/currier.py"
+      - "src/voynich_lab/currier_linestart.py"
       - "tests/test_published_replication.py"
       - "tests/test_currier.py"
+      - "tests/test_currier_linestart.py"
       - ".github/workflows/replication-integration.yml"
   pull_request:
     paths:
@@ -17,8 +19,10 @@ on:
       - "src/voynich_lab/segmentation.py"
       - "src/voynich_lab/replication_targets.py"
       - "src/voynich_lab/currier.py"
+      - "src/voynich_lab/currier_linestart.py"
       - "tests/test_published_replication.py"
       - "tests/test_currier.py"
+      - "tests/test_currier_linestart.py"
       - ".github/workflows/replication-integration.yml"
   workflow_dispatch:
 
@@ -54,6 +58,7 @@ jobs:
           from pathlib import Path
 
           from voynich_lab.currier import currier_boundary_profiles
+          from voynich_lab.currier_linestart import line_start_analysis
           from voynich_lab.published_replication import automatic_replication_metrics
 
           raw = Path("/tmp/ZL3b.txt").read_text(encoding="utf-8", errors="replace")
@@ -123,4 +128,36 @@ jobs:
           assert abs(B["uncertain_rate"] - 0.080) <= 0.002
           assert abs(A["raw_gap_bits"] - 1.53) <= 0.03
           assert abs(B["raw_gap_bits"] - 2.52) <= 0.03
+
+          linestart = line_start_analysis(raw, definition="pstart", representation="collapsed")
+          print("LINESTART")
+          print(json.dumps(linestart, indent=2, sort_keys=True))
+          assert abs(linestart["jsd"]["first"] - 0.485) <= 0.004
+          assert abs(linestart["jsd"]["other"] - 0.176) <= 0.004
+          assert abs(linestart["jsd"]["pooled"] - 0.179) <= 0.004
+
+          expected_first = {
+              "p": 23.7,
+              "t": 18.2,
+              "k": 6.43,
+              "f": 4.47,
+              "y": 0.18,
+              "d": 0.26,
+          }
+          expected_other = {
+              "p": 16.8,
+              "t": 4.56,
+              "k": 0.43,
+              "f": 2.77,
+              "y": 4.77,
+              "d": 1.98,
+          }
+          for glyph, expected in expected_first.items():
+              got = linestart["enrichment_first"][glyph]
+              tolerance = max(0.05, abs(expected) * 0.025)
+              assert abs(got - expected) <= tolerance, ("first", glyph, got, expected)
+          for glyph, expected in expected_other.items():
+              got = linestart["enrichment_other"][glyph]
+              tolerance = max(0.05, abs(expected) * 0.025)
+              assert abs(got - expected) <= tolerance, ("other", glyph, got, expected)
           PY
