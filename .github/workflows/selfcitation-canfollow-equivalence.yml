@@ -1,0 +1,147 @@
+name: Self-citation Curveline Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "src/voynich_lab/selfcitation_canfollow.py"
+      - "tests/test_selfcitation.py"
+      - "tests/test_selfcitation_canfollow.py"
+      - ".github/workflows/selfcitation-canfollow-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  curveline-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream curveline dependencies
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          root=/tmp/canfollow/de/voynich/text
+          mkdir -p "$root/canfollow" "$root/util/random" "$root/util"
+          for file in Glyph.java GlyphGroup.java Substitution.java Constants.java; do
+            curl -fsSL "${base}/de/voynich/text/${file}" -o "$root/${file}"
+          done
+          curl -fsSL "${base}/de/voynich/text/util/Converter.java" -o "$root/util/Converter.java"
+          curl -fsSL "${base}/de/voynich/text/util/StringUtil.java" -o "$root/util/StringUtil.java"
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o "$root/util/random/I_RandomNumberGenerator.java"
+          curl -fsSL "${base}/de/voynich/text/canfollow/I_CanFollow.java" -o "$root/canfollow/I_CanFollow.java"
+          curl -fsSL "${base}/de/voynich/text/canfollow/CurveLineCanFollow.java" -o "$root/canfollow/CurveLineCanFollow.java"
+
+      - name: Add released-config stub and exhaustive Java probe
+        run: |
+          set -euo pipefail
+          root=/tmp/canfollow/de/voynich/text
+          cat > "$root/util/Config.java" <<'JAVA'
+          package de.voynich.text.util;
+          public final class Config {
+              public static boolean useWordFinalSubstitutions = true;
+          }
+          JAVA
+
+          cat > "$root/canfollow/CanFollowParity.java" <<'JAVA'
+          package de.voynich.text.canfollow;
+
+          import de.voynich.text.GlyphGroup;
+
+          public class CanFollowParity {
+              private static final String[] TOKENS = {
+                  "", "qo", "a", "o", "y", "c", "s", "d", "k", "t", "p", "f", "x",
+                  "e", "h", "ch", "sh", "ckh", "cth", "cph", "cfh", "al", "ol", "ar", "or",
+                  "ikh", "ith", "iph", "ifh", "i", "in", "iin", "iiin", "r", "ir", "iir", "iiir",
+                  "m", "im", "iiil", "iil", "il", "iis", "is", "n", "g", "dy", "om", "am", "og", "ag",
+                  "l", "eee", "chedy", "daiin", "qotchedy", "pchal", "xyz"
+              };
+
+              private static final String[] GROUPS = {
+                  "daiin", "chedy", "qotchedy", "pchal", "ol", "cthh", "xyz", "qo",
+                  "chol", "shorchdy", "okeor", "okain", "shedy", "pchedy", "qotar", "lkar"
+              };
+
+              public static void main(String[] args) {
+                  CurveLineCanFollow rule = new CurveLineCanFollow();
+                  for (String left : TOKENS) {
+                      for (String right : TOKENS) {
+                          System.out.println("B\t" + left + "\t" + right + "\t" +
+                              rule.canFollowEachOtherBefore(left, right, null));
+                          System.out.println("A\t" + left + "\t" + right + "\t" +
+                              rule.canFollowEachOtherAfter(left, right, null));
+                      }
+                  }
+
+                  for (String text : GROUPS) {
+                      for (GlyphGroup.GENERATE_TYPE type : new GlyphGroup.GENERATE_TYPE[] {
+                              GlyphGroup.GENERATE_TYPE.INITIAL,
+                              GlyphGroup.GENERATE_TYPE.REPLACE
+                      }) {
+                          GlyphGroup group = new GlyphGroup(text, type);
+                          System.out.println("S\t" + text + "\t" + type + "\t" +
+                              rule.hasValidStartGlyph(group));
+                          System.out.println("V\t" + text + "\t" + type + "\t" +
+                              rule.isValid(group));
+                      }
+                  }
+              }
+          }
+          JAVA
+
+      - name: Compile and run pinned upstream curveline probe
+        run: |
+          set -euo pipefail
+          javac $(find /tmp/canfollow -name '*.java' -print)
+          java -cp /tmp/canfollow de.voynich.text.canfollow.CanFollowParity > /tmp/java_canfollow.tsv
+          wc -l /tmp/java_canfollow.tsv
+
+      - name: Run Python curveline probe on identical grid
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_canfollow.tsv
+          from voynich_lab.selfcitation import GenerateType, GlyphGroup
+          from voynich_lab.selfcitation_canfollow import CurveLineCanFollow
+
+          TOKENS = [
+              "", "qo", "a", "o", "y", "c", "s", "d", "k", "t", "p", "f", "x",
+              "e", "h", "ch", "sh", "ckh", "cth", "cph", "cfh", "al", "ol", "ar", "or",
+              "ikh", "ith", "iph", "ifh", "i", "in", "iin", "iiin", "r", "ir", "iir", "iiir",
+              "m", "im", "iiil", "iil", "il", "iis", "is", "n", "g", "dy", "om", "am", "og", "ag",
+              "l", "eee", "chedy", "daiin", "qotchedy", "pchal", "xyz",
+          ]
+          GROUPS = [
+              "daiin", "chedy", "qotchedy", "pchal", "ol", "cthh", "xyz", "qo",
+              "chol", "shorchdy", "okeor", "okain", "shedy", "pchedy", "qotar", "lkar",
+          ]
+
+          rule = CurveLineCanFollow(use_word_final_substitutions=True)
+          boolean = lambda value: str(bool(value)).lower()
+          for left in TOKENS:
+              for right in TOKENS:
+                  print("\t".join(("B", left, right, boolean(rule.can_follow_each_other_before(left, right)))))
+                  print("\t".join(("A", left, right, boolean(rule.can_follow_each_other_after(left, right)))))
+
+          for text in GROUPS:
+              for generate_type in (GenerateType.INITIAL, GenerateType.REPLACE):
+                  group = GlyphGroup(text, generate_type)
+                  print("\t".join(("S", text, generate_type.value, boolean(rule.has_valid_start_glyph(group)))))
+                  print("\t".join(("V", text, generate_type.value, boolean(rule.is_valid(group)))))
+          PY
+          wc -l /tmp/python_canfollow.tsv
+
+      - name: Require byte-for-byte curveline parity
+        run: |
+          set -euo pipefail
+          diff -u /tmp/java_canfollow.tsv /tmp/python_canfollow.tsv
+          echo "Python CurveLineCanFollow matches pinned upstream Java across the exhaustive probe grid"
