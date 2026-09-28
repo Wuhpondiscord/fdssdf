@@ -68,7 +68,9 @@ jobs:
           cat > "$root/Constants.java" <<'JAVA'
           package de.voynich.text;
           public final class Constants {
+              public static final boolean DEBUG = false;
               public static final String ENTER = "\n";
+              public static final String SAVE_DATE_PATTERN_DEFAULT = "yyyyMMddHHmm";
               static final GlyphGroup DAIIN_GLYPH_GROUP  = new GlyphGroup("daiin",  GlyphGroup.GENERATE_TYPE.INITIAL);
               static final GlyphGroup CHOL_GLYPH_GROUP   = new GlyphGroup("chol",   GlyphGroup.GENERATE_TYPE.INITIAL);
               static final GlyphGroup OL_GLYPH_GROUP     = new GlyphGroup("ol",     GlyphGroup.GENERATE_TYPE.INITIAL);
