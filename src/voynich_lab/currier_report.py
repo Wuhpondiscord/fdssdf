@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from .currier import BOUNDARY_TYPES, currier_boundary_analysis
+import math
+
+from .currier import BOUNDARY_TYPES, currier_ab_bootstrap, currier_boundary_profiles
 from .currier_linestart import GLYPHS, line_start_analysis
 
 # The final pinned executable and its bundled STATED constants disagree.
@@ -33,7 +35,61 @@ LINESTART_STATED = {
 
 
 def _ci_contains_zero(interval: list[float]) -> bool:
-    return interval[0] <= 0 <= interval[1]
+    return all(math.isfinite(value) for value in interval) and interval[0] <= 0 <= interval[1]
+
+
+def _empty_bootstrap() -> dict[str, dict[str, dict[str, object]]]:
+    """Return an explicit non-estimable bootstrap result for sparse corpora."""
+    output: dict[str, dict[str, dict[str, object]]] = {}
+    for scheme in ("independent_strata", "joint_quires"):
+        output[scheme] = {}
+        for name in BOUNDARY_TYPES:
+            output[scheme][name] = {
+                "ci90": [float("nan"), float("nan")],
+                "ci95": [float("nan"), float("nan")],
+                "sd": float("nan"),
+                "valid_draws": 0,
+            }
+    return output
+
+
+def _profiles_and_bootstrap(
+    raw_text: str,
+    *,
+    repetitions: int,
+    seed: int,
+) -> tuple[dict[str, object], bool]:
+    """Build deterministic profiles and bootstrap only when every class exists.
+
+    Small/custom IVTFF samples can legitimately contain no observations for one
+    of the five boundary classes. The paper-scale bootstrap assumes every class
+    exists in both Currier strata, so a sparse sample should be reported as
+    non-estimable rather than allowed to crash inside percentile calculation.
+    """
+    boundary = currier_boundary_profiles(raw_text)
+    profiles = boundary["profiles"]
+    if "A" not in profiles or "B" not in profiles:
+        raise ValueError("Currier report requires both native $L=A and $L=B strata.")
+
+    estimable = all(
+        profiles[language]["n"][name] > 0
+        for language in ("A", "B")
+        for name in BOUNDARY_TYPES
+    )
+    if estimable:
+        bootstrap = currier_ab_bootstrap(
+            raw_text,
+            repetitions=repetitions,
+            seed=seed,
+        )
+    else:
+        bootstrap = {
+            "repetitions": repetitions,
+            "seed": seed,
+            **_empty_bootstrap(),
+        }
+    boundary["bootstrap"] = bootstrap
+    return boundary, estimable
 
 
 def build_currier_report(
@@ -52,14 +108,12 @@ def build_currier_report(
       3. line-start executable reproduction, whose pinned final-code output
          differs from the same upstream file's hard-coded STATED constants.
     """
-    boundary = currier_boundary_analysis(
+    boundary, bootstrap_estimable = _profiles_and_bootstrap(
         raw_text,
-        bootstrap_repetitions=boundary_bootstrap_repetitions,
+        repetitions=boundary_bootstrap_repetitions,
         seed=seed,
     )
     profiles = boundary["profiles"]
-    if "A" not in profiles or "B" not in profiles:
-        raise ValueError("Currier report requires both native $L=A and $L=B strata.")
 
     boundary_rows = []
     for name in BOUNDARY_TYPES:
@@ -150,12 +204,21 @@ def build_currier_report(
 
     uncertain_independent = bootstrap["independent_strata"]["uncertain"]["ci90"]
     uncertain_joint = bootstrap["joint_quires"]["uncertain"]["ci90"]
+    if bootstrap_estimable:
+        uncertainty_text = (
+            f"For the uncertain-separator A-B index, the independent-strata 90% interval is "
+            f"[{uncertain_independent[0]:.4f}, {uncertain_independent[1]:.4f}] and the joint-quire interval is "
+            f"[{uncertain_joint[0]:.4f}, {uncertain_joint[1]:.4f}]. "
+        )
+    else:
+        uncertainty_text = (
+            "Quire-bootstrap intervals are not estimable for this input because at least one Currier stratum "
+            "has zero observations in one or more boundary classes. "
+        )
     interpretation = (
         "Currier A/B boundary profiles are computed on stratum-local PMI scales and uncertainty is resampled by quire. "
-        f"For the uncertain-separator A-B index, the independent-strata 90% interval is "
-        f"[{uncertain_independent[0]:.4f}, {uncertain_independent[1]:.4f}] and the joint-quire interval is "
-        f"[{uncertain_joint[0]:.4f}, {uncertain_joint[1]:.4f}]. "
-        "Do not interpret a pooled A/B point difference as an independent dialect effect when these quire-aware intervals include zero. "
+        + uncertainty_text
+        + "Do not interpret a pooled A/B point difference as an independent dialect effect without quire-aware uncertainty. "
         "Line-start values are labeled as pinned-executable results because the authors' final executable output differs from its bundled STATED constants."
     )
 
@@ -172,6 +235,7 @@ def build_currier_report(
             "line_start_method": "pstart + composite-collapsed; executable-parity path",
             "seed": seed,
             "boundary_bootstrap_repetitions": boundary_bootstrap_repetitions,
+            "boundary_bootstrap_estimable": bootstrap_estimable,
             "line_start_null_draws": line_start_null_draws,
             "line_start_bootstrap_repetitions": line_start_bootstrap_repetitions,
         },
