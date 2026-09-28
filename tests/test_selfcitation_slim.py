@@ -69,11 +69,13 @@ def test_previous_dy_q_rule_stops_at_90():
     assert morpher._choose_prefix(0, GlyphGroup("chedy"), []) == "d"
 
 
-def test_q_prefix_replaces_initial_o_with_qo_without_extra_rng_after_choice():
+def test_q_prefix_replaces_literal_initial_o_with_qo_without_extra_rng_after_choice():
+    # "ol" is one ligature token upstream, so q cannot replace it as though it
+    # were the single-glyph token "o". "ody" begins with a literal o token.
     rng = QueueRandom(80)
     morpher = SlimGroupMorpher(random_number_generator=rng)
-    result = morpher._try_to_add_prefix(GlyphGroup("ol"), None, False)
-    assert str(result) == "qol"
+    result = morpher._try_to_add_prefix(GlyphGroup("ody"), None, False)
+    assert str(result) == "qody"
     assert result.generate_type == GenerateType.ADD
     assert rng.calls == [100]
 
