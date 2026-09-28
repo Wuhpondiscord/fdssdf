@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from enum import Enum
+from typing import Iterable, Sequence
 
 
 SELFCITATION_UPSTREAM_REPOSITORY = "TorstenTimm/SelfCitationTextgenerator"
@@ -68,6 +70,235 @@ class JavaRandom:
         if maximum == 0:
             return 0
         return self.next_int(maximum)
+
+
+class GenerateType(str, Enum):
+    """Upstream ``GlyphGroup.GENERATE_TYPE`` values."""
+
+    INITIAL = "INITIAL"
+    ADD = "ADD"
+    DELETE = "DELETE"
+    REPLACE = "REPLACE"
+    COMBINE = "COMBINE"
+    SPLIT = "SPLIT"
+    SHORTEN = "SHORTEN"
+
+
+# Literal insertion order from Glyph.java's ``ligatureStrings`` table at the
+# pinned upstream commit. ``Glyph.determineStartLigature`` does not iterate this
+# array directly: Converter constructs a java.util.HashMap and iterates keySet().
+_LIGATURE_INSERTION_ORDER: tuple[str, ...] = (
+    "ol",
+    "or",
+    "al",
+    "ar",
+    "dy",
+    "qo",
+    "ch",
+    "sh",
+    "cs",
+    "eee",
+    "ee",
+    "cth",
+    "cthh",
+    "ckh",
+    "ckhh",
+    "cph",
+    "cfh",
+    "ith",
+    "ikh",
+    "iph",
+    "ifh",
+    "eke",
+    "ete",
+    "in",
+    "iin",
+    "iiin",
+    "ir",
+    "iir",
+    "iiir",
+    "is",
+    "iis",
+    "iiis",
+    "il",
+    "iil",
+    "iiil",
+    "im",
+    "iim",
+    "iiim",
+    "om",
+    "am",
+    "og",
+    "ag",
+)
+
+_GALLOW_GLYPHS = ("k", "t", "p", "f")
+_LINE_INITIAL_GLYPHS = ("o", "y", "d", "s")
+_OL_GLYPHS = ("ol", "al", "or", "ar")
+_DY_GLYPH = "dy"
+
+
+def java_string_hash_code(text: str) -> int:
+    """Return Java ``String.hashCode()`` as a signed 32-bit integer."""
+
+    value = 0
+    for char in text:
+        value = (31 * value + ord(char)) & 0xFFFFFFFF
+    return value if value < 0x80000000 else value - 0x100000000
+
+
+def _java_hashmap_spread(text: str) -> int:
+    """Return the JDK 8+ HashMap spread hash for a String key."""
+
+    value = java_string_hash_code(text) & 0xFFFFFFFF
+    return (value ^ (value >> 16)) & 0xFFFFFFFF
+
+
+def _java_hashmap_bucket_scan_order(keys: Sequence[str], capacity: int) -> tuple[str, ...]:
+    """Reproduce key iteration for these small, non-treeified upstream maps.
+
+    JDK 8+ ``HashMap`` iteration walks buckets from index 0 upward and follows
+    each bucket's linked-list order. The pinned tables here never treeify; their
+    final capacities are known from the constructor size and resize threshold.
+    """
+
+    if capacity <= 0 or capacity & (capacity - 1):
+        raise ValueError("capacity must be a positive power of two")
+    buckets: list[list[str]] = [[] for _ in range(capacity)]
+    for key in keys:
+        buckets[_java_hashmap_spread(key) & (capacity - 1)].append(key)
+    return tuple(key for bucket in buckets for key in bucket)
+
+
+# new HashMap<>(42) allocates a 64-slot table on first insertion and has a
+# threshold of 48, so the 42-entry ligature map never resizes.
+_LIGATURE_SCAN_ORDER = _java_hashmap_bucket_scan_order(_LIGATURE_INSERTION_ORDER, 64)
+
+# Converter constructs this four-key map with new HashMap<>(4). It resizes once
+# from 4 to 8 slots after the fourth insertion; the final JDK 8+ bucket walk is
+# therefore ar, al, or, ol (al/or share a bucket and retain insertion order).
+_COMBINABLE_LIGATURE_SCAN_ORDER = ("ar", "al", "or", "ol")
+
+
+def determine_start_ligature(glyph_group: str) -> str | None:
+    """Match upstream ``Glyph.determineStartLigature`` exactly."""
+
+    # Upstream special-cases eee so the ee entry cannot capture it first.
+    if glyph_group.startswith("eee"):
+        return "eee"
+    for ligature in _LIGATURE_SCAN_ORDER:
+        if glyph_group.startswith(ligature):
+            return ligature
+    return None
+
+
+def tokenize_glyph_group(glyph_group: str) -> tuple[str, ...]:
+    """Parse one EVA glyph group with the pinned Java ligature semantics."""
+
+    glyph_group = str(glyph_group)
+    tokens: list[str] = []
+    pos = 0
+    while pos < len(glyph_group):
+        remainder = glyph_group[pos:]
+        ligature = determine_start_ligature(remainder)
+        if ligature is not None:
+            tokens.append(ligature)
+            pos += len(ligature)
+        else:
+            tokens.append(remainder[0])
+            pos += 1
+    return tuple(tokens)
+
+
+class GlyphGroup:
+    """Python port of the pinned upstream ``GlyphGroup`` value semantics."""
+
+    def __init__(
+        self,
+        glyph_group: str | Iterable[str],
+        generate_type: GenerateType | str = GenerateType.INITIAL,
+    ) -> None:
+        if isinstance(glyph_group, str):
+            text = glyph_group
+        else:
+            text = "".join(str(token) for token in glyph_group)
+        self.glyph_group = text
+        self.generate_type = GenerateType(generate_type)
+        # The Java list constructor joins tokens and then calls parse(), so it
+        # does not preserve caller-supplied token boundaries either.
+        self._tokens = tokenize_glyph_group(text)
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        return self._tokens
+
+    def get_token_count(self) -> int:
+        return len(self._tokens)
+
+    def length(self) -> int:
+        return len(self.glyph_group)
+
+    def get_token(self, pos: int) -> str:
+        return self._tokens[pos]
+
+    def tokens_as_string(self) -> str:
+        return "".join(f"{{{token}}}" for token in self._tokens)
+
+    def copy_tokens(self) -> list[str]:
+        return list(self._tokens)
+
+    def starts_with_gallow(self) -> bool:
+        return self.glyph_group.startswith(_GALLOW_GLYPHS)
+
+    def starts_with_line_initial_glyph(self) -> bool:
+        return self.glyph_group.startswith(_LINE_INITIAL_GLYPHS)
+
+    def has_prefix(self, prefix: str) -> bool:
+        return self._tokens[0] == prefix
+
+    def contains_combinable_ligature(self) -> bool:
+        return any(token in _OL_GLYPHS for token in self._tokens)
+
+    def get_first_combinable_ligature(self) -> str | None:
+        # Match the upstream HashMap keySet() scan, not token position order.
+        for ligature in _COMBINABLE_LIGATURE_SCAN_ORDER:
+            if ligature in self._tokens:
+                return ligature
+        return None
+
+    def contains(self, search: str) -> bool:
+        # Java checks token equality here, not substring containment.
+        return search in self._tokens
+
+    def contains_gallow(self) -> bool:
+        return any(gallow in self.glyph_group for gallow in _GALLOW_GLYPHS)
+
+    def is_type_i(self) -> bool:
+        return "i" in self.glyph_group
+
+    def is_type_ol(self) -> bool:
+        return any(token in _OL_GLYPHS for token in self._tokens)
+
+    def is_type_dy(self) -> bool:
+        if _DY_GLYPH in self._tokens:
+            return True
+        last_char = self.glyph_group[-1]
+        return last_char in {"y", "d"}
+
+    def ends_with_dy_token(self) -> bool:
+        return self._tokens[-1] == _DY_GLYPH
+
+    def __hash__(self) -> int:
+        return java_string_hash_code(self.glyph_group)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, GlyphGroup) and self.glyph_group == other.glyph_group
+
+    def __str__(self) -> str:
+        return self.glyph_group
+
+    def __repr__(self) -> str:
+        return f"GlyphGroup({self.glyph_group!r}, {self.generate_type.value})"
 
 
 @dataclass(frozen=True)
