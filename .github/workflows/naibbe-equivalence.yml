@@ -1,0 +1,108 @@
+name: Naibbe Upstream Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/generators.py"
+      - "src/voynich_lab/data/naibbe_tables.csv"
+      - "tests/test_generators.py"
+      - ".github/workflows/naibbe-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  compare-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install upstream runtime dependency
+        run: python -m pip install "pandas>=2,<4"
+      - name: Download pinned upstream baseline
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/naibbe-upstream/references
+          base="https://raw.githubusercontent.com/greshko/naibbe-cipher/f2675ec5dd275268bc64dd48ea64fc0e0e9827a2"
+          curl --fail --location --silent --show-error "$base/naibbe.py" -o /tmp/naibbe-upstream/naibbe.py
+          curl --fail --location --silent --show-error "$base/references/naibbe_tables.csv" -o /tmp/naibbe-upstream/references/naibbe_tables.csv
+      - name: Compare seeded outputs field by field
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import io
+          import os
+          from pathlib import Path
+          import random
+
+          from voynich_lab.generators import generate_naibbe
+
+          workspace = Path.cwd()
+          upstream_dir = Path("/tmp/naibbe-upstream")
+          os.chdir(upstream_dir)
+          spec = importlib.util.spec_from_file_location("naibbe_upstream", upstream_dir / "naibbe.py")
+          upstream = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(upstream)
+          os.chdir(workspace)
+
+          plaintext = (
+              "Nel mezzo del cammin di nostra vita,\n"
+              "ché la diritta via era smarrita.\n"
+              "\n"
+              "Arma virumque canō; W, J, K.\n"
+          )
+          seed = 20250922
+
+          random.seed(seed)
+          upstream.ambiguity_retries = 0
+          upstream_final = []
+          upstream_canonical = []
+          upstream_respaced_plaintext = []
+          for line in plaintext.split("\n"):
+              cleaned = upstream.clean_line(line)
+              if cleaned:
+                  pre_plain = io.StringIO()
+                  encrypted = upstream.encrypt_naibbe(
+                      cleaned,
+                      upstream.naibbe_tables,
+                      upstream.placeholder_to_glyph,
+                      use_78=False,
+                      pre_plaintext_file=pre_plain,
+                  )
+                  canonical = " ".join(encrypted)
+                  upstream_canonical.append(canonical)
+                  upstream_final.append(upstream.respace_line(canonical, 0.03))
+                  upstream_respaced_plaintext.append(pre_plain.getvalue().removesuffix("\n"))
+              else:
+                  upstream_canonical.append("")
+                  upstream_final.append("")
+                  upstream_respaced_plaintext.append("")
+
+          ours = generate_naibbe(plaintext, seed=seed)
+          expected_final = "\n".join(upstream_final)
+          expected_canonical = "\n".join(upstream_canonical)
+          expected_plain = "\n".join(upstream_respaced_plaintext)
+
+          assert ours.respaced_plaintext == expected_plain, (
+              "respaced plaintext differs from pinned upstream implementation"
+          )
+          assert ours.canonical_ciphertext == expected_canonical, (
+              "canonical ciphertext differs from pinned upstream implementation"
+          )
+          assert ours.ciphertext == expected_final, (
+              "space-dropped ciphertext differs from pinned upstream implementation"
+          )
+          assert ours.ambiguity_retries == upstream.ambiguity_retries, (
+              ours.ambiguity_retries,
+              upstream.ambiguity_retries,
+          )
+          print("Naibbe baseline matches pinned upstream exactly")
+          print(f"ambiguity retries: {ours.ambiguity_retries}")
+          print(f"canonical chars: {len(ours.canonical_ciphertext)}")
+          print(f"final chars: {len(ours.ciphertext)}")
+          PY
