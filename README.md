@@ -26,23 +26,25 @@ This repository is deliberately **not** a "Voynich decipherer." Its current focu
 - **Published-method within-token BPE** (`segmentation.py`): merge rules are learned only inside conventional transcription tokens, pair counts are token-frequency weighted, rules are applied unchanged to held-out quire vocabularies, and unit-bigram scoring may cross token boundaries only within the same manuscript line.
 - **Two-layer adversarial validation**: `scorecard.py` (locked interpretable feature-vector discrepancy / D-infinity) and `discriminator.py` (group-aware classifier two-sample test with held-out AUC).
 - **Paper-exact replication layer** (`published_replication.py`): separate preprocessing/null contracts for character entropy, token order, glyph-edge order, cross-fit unit scale, and erased-space separator crossing.
+- **Currier stratification** (`currier.py`): Currier A/B boundary profiles with stratum-local PMI anchors, native `$Q` resampling, and both independent-stratum and joint-quire bootstrap schemes.
+- **Line-start decomposition** (`currier_linestart.py`): paragraph-first versus other-line JSD, six-glyph enrichment, Currier-stratified JSD, relabel nulls, and quire bootstrap, with executable parity checked against the authors' pinned script.
 - **Replication gate** (`replication_targets.py`): verified Rozanova & Temerev targets are computed automatically from IVTFF input; separate Parisel statistics remain available for manual comparison.
 - Optional ZeroGPU co-occurrence/PPMI-SVD probe behind an explicit button.
 - Automatic GitHub → Hugging Face Space mirroring.
-- Ordinary pytest CI plus a pinned full-corpus literature-reproduction integration test.
+- Ordinary pytest CI plus pinned full-corpus literature-reproduction integration tests.
 
 ## Published replication
 
 The automatic Rozanova & Temerev path follows the public reproduction code rather than forcing all statistics through one generic normalized stream. This matters because the paper uses different corpus-cleaning and null-model conventions for different headline results.
 
-The integration workflow pins the authors' final reproduction archive at:
+The integration workflows pin the authors' final reproduction archive at:
 
 ```text
 lrozanova/voynich-units
 956a7c4fc39981f4d116fa3f4edfccce6d065571
 ```
 
-It downloads that revision's `ZL3b.txt` and runs this repository's implementation end-to-end. The current reproduced values are:
+They download that revision's `ZL3b.txt` and run this repository's implementation end-to-end. The current reproduced values are:
 
 | Statistic | This implementation | Published value |
 |---|---:|---:|
@@ -66,7 +68,45 @@ The same Table-8 reproduction also yields `477 / 2,350 = 0.202979` for uncertain
 - **Token succession** uses the 2,000-type cap and a separate Python `random.Random(20260810)` within-line shuffle procedure; the denominator is full capped-token marginal entropy `H(T)`.
 - **Separator crossing** erases spaces first, learns BPE within manuscript-line strings, and evaluates hidden separator positions at the paper's 64-merge checkpoint.
 
-The pinned integration check lives in `.github/workflows/replication-integration.yml`. Ordinary unit/regression tests live in `.github/workflows/tests.yml`.
+### Currier A/B reproduction
+
+The Currier boundary-profile implementation recomputes the PMI normalization separately inside A and B, rather than forcing both strata onto one pooled scale. On the pinned archive it reproduces the released analysis values:
+
+| Boundary class | Currier A | Currier B | A − B |
+|---|---:|---:|---:|
+| uncertain separators | 0.493805 | 0.502914 | -0.009109 |
+| first in line | ≈0.104 | ≈0.069 | ≈+0.036 |
+| mid-line | ≈0.125 | ≈0.037 | ≈+0.088 |
+| certain separators | ≈0.094 | ≈-0.003 | ≈+0.096 |
+| line break | ≈-0.010 | ≈-0.041 | ≈+0.031 |
+
+The uncertain-separator rates are `0.08803` for A and `0.07959` for B; raw uncertain-minus-certain PMI gaps are `1.53252` and `2.52171` bits respectively.
+
+The paper-level 1,500-draw quire bootstrap is reproduced separately. For the uncertain-index A−B difference, the 90% intervals are:
+
+- independent A/B quire resampling: `[-0.05152, 0.03714]`
+- joint pooled-quire resampling: `[-0.04842, 0.03479]`
+
+Both include zero. This is why the project does not present the small pooled A/B difference as a stand-alone dialect-significance result.
+
+### Line-start executable-vs-stated discrepancy
+
+The pinned final `reproduce_dialect_linestart.py` contains two different objects: values **computed by the executable analysis** and older hard-coded `STATED` constants. Our implementation is checked directly against the executable output and matches it to floating-point precision.
+
+For the primary `pstart` + composite-collapsed analysis on the pinned final archive:
+
+| Quantity | Pinned executable (and this repo) | Bundled `STATED` constant |
+|---|---:|---:|
+| JSD, paragraph-first lines | 0.527549 | 0.485 |
+| JSD, other lines | 0.179247 | 0.176 |
+| JSD, pooled | 0.202997 | 0.179 |
+| first/other JSD ratio | 2.94314 | 2.75 |
+
+The same mismatch occurs in several enrichment ratios. For example, executable paragraph-first enrichment is `p=24.3071`, `t=11.9128`, `k=3.01265`, `f=5.02975`, `y=0.38133`, `d=0.32563`, while the bundled constants are `23.7, 18.2, 6.43, 4.47, 0.18, 0.26`.
+
+This repository does **not** alter the implementation to force the final archive to match stale constants. `.github/workflows/upstream-linestart-equivalence.yml` downloads the authors' exact pinned executable and verifies our computed JSD/enrichment/Currier-stratified line-start fields against it to machine precision, while also asserting that the executable and `STATED` values materially differ.
+
+The pinned deterministic integration check lives in `.github/workflows/replication-integration.yml`; the full 1,500-draw Currier uncertainty check lives in `.github/workflows/currier-bootstrap-integration.yml`; executable line-start parity lives in `.github/workflows/upstream-linestart-equivalence.yml`; ordinary unit/regression tests live in `.github/workflows/tests.yml`.
 
 ## Hugging Face target
 
@@ -105,15 +145,14 @@ python -m pytest -q
 
 Whitespace is treated as an observation, not a verified linguistic word boundary. Metrics involving whitespace-delimited strings are explicitly labeled as conventional transcription-token metrics. IVTFF-parsed input additionally distinguishes certain from uncertain separators instead of collapsing them.
 
-Native `$Q` quire metadata is used when it is present in the loaded transcription. The literature-reproduction path intentionally follows the preprocessing choices of the cited public reproduction code; the generic exploratory tabs remain separate so a convenient descriptive metric is not accidentally presented as a reproduced paper statistic.
+Native `$Q` and `$L` metadata are used where present. Currier A/B comparisons are quire-aware and use stratum-local normalization. The literature-reproduction path intentionally follows the preprocessing choices of the cited public reproduction code; the generic exploratory tabs remain separate so a convenient descriptive metric is not accidentally presented as a reproduced paper statistic.
 
 Known gaps, in priority order:
 
 1. **Generator library.** No Naibbe, self-citation, or grille-cipher generator is implemented yet. For reportable comparisons, prefer the original authors' released implementations over an approximation reconstructed only from prose, and keep meaningful-cipher and meaningless-pseudotext generator families separate.
 2. **Consensus segmentation.** BPE is implemented, including paper-exact held-out BPE, but an independent segmental HSMM and motif-discovery path are not yet implemented. A later consensus analysis should report where independent methods agree rather than treating BPE output as identified linguistic units.
-3. **Currier stratification.** Native `$L` labels are parsed, but a proper stratified/mixture analysis and held-out evaluation should be added before drawing model-level conclusions from Currier A/B differences.
-4. **Covariance-aware discrepancy.** `scorecard.py` currently uses the simpler D-infinity / per-feature z-score framework. A Mahalanobis-style statistic needs enough Monte Carlo replicates for stable covariance estimation and validation.
-5. **Sealed-test enforcement.** The code supports held-out analyses, but it does not yet enforce a preregistered fit/validation/sealed partition before generator tuning.
-6. **Independent literature families.** The automatic gate currently reproduces the verified Rozanova & Temerev pipeline. Parisel's positional-class statistics are kept separate until their full preprocessing/estimation pipeline is implemented and independently checked.
+3. **Covariance-aware discrepancy.** `scorecard.py` currently uses the simpler D-infinity / per-feature z-score framework. A Mahalanobis-style statistic needs enough Monte Carlo replicates for stable covariance estimation and validation.
+4. **Sealed-test enforcement.** The code supports held-out analyses, but it does not yet enforce a preregistered fit/validation/sealed partition before generator tuning.
+5. **Independent literature families.** The automatic gate currently reproduces the verified Rozanova & Temerev pipeline. Parisel's positional-class statistics are kept separate until their full preprocessing/estimation pipeline is implemented and independently checked.
 
 GitHub `main` is the source of truth; `.github/workflows/mirror-to-hf.yml` mirrors it to `wuhp/ghtest`.
