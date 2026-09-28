@@ -13,6 +13,11 @@ from voynich_lab.selfcitation_generator import (
 )
 
 
+def _expected_initial_output(config):
+    generator = SelfCitationTextGenerator(config)
+    return generator.trim_initial_line(config.initial_line.split(" "))
+
+
 def test_search_shorter_glyph_matches_upstream_first_shortest_rule():
     assert search_shorter_glyph("a") is None
     assert search_shorter_glyph("xyz") is None
@@ -32,7 +37,8 @@ def test_generator_wires_one_shared_rng_into_all_generation_components():
 
 def test_initial_line_populates_statistics_but_not_generated_line_arrays():
     generator = SelfCitationTextGenerator()
-    assert generator.generated_text == [generator.config.initial_line]
+    expected_initial = generator.trim_initial_line(generator.config.initial_line.split(" "))
+    assert generator.generated_text == [expected_initial]
     assert generator.line_arrays == []
     assert generator.paragraph_initial_line_arrays == []
     assert generator.statistics.stat_tokens == len(generator.config.initial_line.split(" "))
@@ -65,11 +71,11 @@ def test_small_canonical_generation_is_seed_deterministic():
     second = generate_selfcitation(config)
     assert first.lines == second.lines
     assert len(first.lines) == 8
-    assert first.lines[0] == config.initial_line
+    assert first.lines[0] == _expected_initial_output(config)
     assert all(isinstance(line, str) for line in first.lines)
 
 
 def test_generate_prefix_request_can_return_only_initial_lines_without_rng_work():
     config = replace(canonical_selfcitation_config(), lines_to_create=8)
     result = generate_selfcitation(config, lines_to_create=1)
-    assert result.lines == (config.initial_line,)
+    assert result.lines == (_expected_initial_output(config),)
