@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 import math
 
+from .grille import generate_rugg_grille_text
 from .selfcitation import canonical_selfcitation_config
 from .selfcitation_generator import generate_selfcitation_text
 
 
 SELFCITATION_ADAPTER_NAME = "H1 Timm/Schinner self-citation pseudotext"
+RUGG_ADAPTER_NAME = "H2 Rugg fitted table-and-grille pseudotext"
 
 
 def estimate_selfcitation_lines(reference_text: str, *, max_lines: int = 1200) -> int:
@@ -44,3 +46,14 @@ def selfcitation_reference_matched(reference_text: str, seed: int = 0) -> str:
         lines_to_create=line_count,
     )
     return generate_selfcitation_text(config, lines_to_create=line_count)
+
+
+def rugg_reference_matched(reference_text: str, seed: int = 0) -> str:
+    """Scorecard/discriminator adapter for the fitted Rugg table-and-grille model.
+
+    The generator itself conditions on the reference line/token counts and learns
+    only its reusable fragment inventory / component occupancy from the reference.
+    It therefore already obeys the common ``(text, seed) -> text`` contract.
+    """
+
+    return generate_rugg_grille_text(reference_text, seed=int(seed))
