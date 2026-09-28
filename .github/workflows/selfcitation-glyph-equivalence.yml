@@ -1,0 +1,107 @@
+name: Self-citation GlyphGroup Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "tests/test_selfcitation.py"
+      - ".github/workflows/selfcitation-glyph-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  glyph-group-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream classes
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          mkdir -p /tmp/selfcitation/de/voynich/text/util/random
+          mkdir -p /tmp/selfcitation/de/voynich/text/util
+          mkdir -p /tmp/selfcitation/de/voynich/text
+          curl -fsSL "${base}/de/voynich/text/Glyph.java" -o /tmp/selfcitation/de/voynich/text/Glyph.java
+          curl -fsSL "${base}/de/voynich/text/GlyphGroup.java" -o /tmp/selfcitation/de/voynich/text/GlyphGroup.java
+          curl -fsSL "${base}/de/voynich/text/Substitution.java" -o /tmp/selfcitation/de/voynich/text/Substitution.java
+          curl -fsSL "${base}/de/voynich/text/util/Converter.java" -o /tmp/selfcitation/de/voynich/text/util/Converter.java
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o /tmp/selfcitation/de/voynich/text/util/random/I_RandomNumberGenerator.java
+
+      - name: Compile and run upstream GlyphGroup probe
+        run: |
+          set -euo pipefail
+          cat > /tmp/selfcitation/de/voynich/text/GlyphParity.java <<'JAVA'
+          package de.voynich.text;
+
+          public class GlyphParity {
+              public static void main(String[] args) {
+                  for (String text : args) {
+                      GlyphGroup group = new GlyphGroup(text, GlyphGroup.GENERATE_TYPE.INITIAL);
+                      String first = group.getFirstCombinableLigature();
+                      System.out.println(
+                          text + "\t" +
+                          group.tokensAsString() + "\t" +
+                          group.getTokenCount() + "\t" +
+                          group.length() + "\t" +
+                          group.startsWithGallow() + "\t" +
+                          group.startsWithLineInitialGlyph() + "\t" +
+                          group.containsGallow() + "\t" +
+                          group.isTypeI() + "\t" +
+                          group.isTypeOl() + "\t" +
+                          group.isTypeDy() + "\t" +
+                          group.endsWithDyToken() + "\t" +
+                          (first == null ? "null" : first)
+                      );
+                  }
+              }
+          }
+          JAVA
+          javac $(find /tmp/selfcitation -name '*.java' -print)
+          java -cp /tmp/selfcitation de.voynich.text.GlyphParity \
+            eee cthh ckhh pchal shorchdy okeor shedy qotchedy ol lkar \
+            pcholal chedy olal daiin iiin iiir > /tmp/java_glyphs.tsv
+          cat /tmp/java_glyphs.tsv
+
+      - name: Compare Python GlyphGroup probe byte-for-byte
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_glyphs.tsv
+          from voynich_lab.selfcitation import GlyphGroup
+
+          words = [
+              "eee", "cthh", "ckhh", "pchal", "shorchdy", "okeor",
+              "shedy", "qotchedy", "ol", "lkar", "pcholal", "chedy",
+              "olal", "daiin", "iiin", "iiir",
+          ]
+          for text in words:
+              group = GlyphGroup(text)
+              first = group.get_first_combinable_ligature()
+              fields = [
+                  text,
+                  group.tokens_as_string(),
+                  str(group.get_token_count()),
+                  str(group.length()),
+                  str(group.starts_with_gallow()).lower(),
+                  str(group.starts_with_line_initial_glyph()).lower(),
+                  str(group.contains_gallow()).lower(),
+                  str(group.is_type_i()).lower(),
+                  str(group.is_type_ol()).lower(),
+                  str(group.is_type_dy()).lower(),
+                  str(group.ends_with_dy_token()).lower(),
+                  "null" if first is None else first,
+              ]
+              print("\t".join(fields))
+          PY
+          diff -u /tmp/java_glyphs.tsv /tmp/python_glyphs.tsv
+          echo "Python GlyphGroup behavior matches pinned upstream Java probe"
