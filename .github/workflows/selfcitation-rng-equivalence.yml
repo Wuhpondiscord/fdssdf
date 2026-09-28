@@ -1,0 +1,73 @@
+name: Self-citation Java RNG Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "tests/test_selfcitation.py"
+      - ".github/workflows/selfcitation-rng-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  java-rng-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Generate Java reference sequence
+        run: |
+          cat > /tmp/RandomParity.java <<'JAVA'
+          import java.util.Random;
+
+          public class RandomParity {
+              public static void main(String[] args) {
+                  int[] bounds = {1,2,4,8,16,3,7,10,97,1000,2000000000};
+                  long[] seeds = {0,1,19,55,123456789L,9999};
+                  for (long seed : seeds) {
+                      Random r = new Random(seed);
+                      System.out.print(seed);
+                      for (int i = 0; i < 12; i++) {
+                          System.out.print(",u=" + r.nextInt());
+                      }
+                      for (int bound : bounds) {
+                          for (int i = 0; i < 40; i++) {
+                              System.out.print("," + bound + "=" + r.nextInt(bound));
+                          }
+                      }
+                      System.out.println();
+                  }
+              }
+          }
+          JAVA
+          javac /tmp/RandomParity.java
+          java -cp /tmp RandomParity > /tmp/java_rng.txt
+      - name: Compare Python JavaRandom field by field
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from voynich_lab.selfcitation import JavaRandom
+
+          bounds = [1,2,4,8,16,3,7,10,97,1000,2_000_000_000]
+          for line in Path('/tmp/java_rng.txt').read_text().splitlines():
+              fields = line.split(',')
+              seed = int(fields[0])
+              expected = fields[1:]
+              rng = JavaRandom(seed)
+              actual = []
+              for _ in range(12):
+                  actual.append(f"u={rng.next_int()}")
+              for bound in bounds:
+                  for _ in range(40):
+                      actual.append(f"{bound}={rng.next_int(bound)}")
+              assert actual == expected, f"Java RNG parity failed for seed {seed}"
+          print('JavaRandom matches java.util.Random across all reference sequences')
+          PY
