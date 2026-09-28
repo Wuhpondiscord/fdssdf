@@ -35,8 +35,22 @@ def test_report_shapes_and_provenance():
     assert len(report["line_start_enrichment_rows"]) == 12
     assert report["provenance"]["boundary_bootstrap_repetitions"] == 20
     assert report["provenance"]["seed"] == 7
+    assert report["provenance"]["boundary_bootstrap_estimable"] is False
     assert "stratum-local PMI" in report["provenance"]["boundary_method"]
     assert "executable-parity" in report["provenance"]["line_start_method"]
+
+
+def test_sparse_report_marks_bootstrap_non_estimable_instead_of_crashing():
+    report = build_currier_report(
+        RAW,
+        boundary_bootstrap_repetitions=20,
+        seed=7,
+    )
+    assert all(row["valid_draws"] == 0 for row in report["bootstrap_rows"])
+    assert all(row["ci90_low"] != row["ci90_low"] for row in report["bootstrap_rows"])
+    assert all(row["ci90_high"] != row["ci90_high"] for row in report["bootstrap_rows"])
+    assert all(row["ci90_contains_zero"] is False for row in report["bootstrap_rows"])
+    assert "not estimable" in report["interpretation"].lower()
 
 
 def test_report_keeps_executable_and_stated_values_separate():
