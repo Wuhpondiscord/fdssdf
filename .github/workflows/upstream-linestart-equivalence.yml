@@ -1,0 +1,111 @@
+name: Upstream Line-Start Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/currier.py"
+      - "src/voynich_lab/currier_linestart.py"
+      - "tests/test_currier_linestart.py"
+      - ".github/workflows/upstream-linestart-equivalence.yml"
+  pull_request:
+    paths:
+      - "src/voynich_lab/currier.py"
+      - "src/voynich_lab/currier_linestart.py"
+      - "tests/test_currier_linestart.py"
+      - ".github/workflows/upstream-linestart-equivalence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare-executables:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install numeric and plotting dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy>=1.26,<3" "matplotlib>=3.8,<4"
+      - name: Download pinned upstream driver and corpus
+        run: |
+          mkdir -p /tmp/upstream /tmp/upstream-data /tmp/upstream-figures
+          base="https://raw.githubusercontent.com/lrozanova/voynich-units/956a7c4fc39981f4d116fa3f4edfccce6d065571"
+          curl --fail --location --silent --show-error \
+            "$base/analysis/reproduce_dialect_linestart.py" \
+            --output /tmp/upstream/reproduce_dialect_linestart.py
+          curl --fail --location --silent --show-error \
+            "$base/analysis/reproduce_headlines.py" \
+            --output /tmp/upstream/reproduce_headlines.py
+          curl --fail --location --silent --show-error \
+            "$base/voynich_decipherment_repro_bundle/voynich_calibration_sources/ZL3b.txt" \
+            --output /tmp/upstream-data/ZL3b.txt
+          test -s /tmp/upstream/reproduce_dialect_linestart.py
+          test -s /tmp/upstream/reproduce_headlines.py
+          test -s /tmp/upstream-data/ZL3b.txt
+      - name: Run pinned upstream executable
+        run: |
+          python /tmp/upstream/reproduce_dialect_linestart.py \
+            /tmp/upstream-data \
+            --bootstrap 20 \
+            --jsd-null 1 \
+            --seed 20260808 \
+            --paragraph-definition pstart \
+            --figure-output /tmp/upstream-figures \
+            --json-output /tmp/upstream-result.json
+          test -s /tmp/upstream-result.json
+      - name: Compare our executable result to upstream
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from voynich_lab.currier_linestart import line_start_analysis
+
+          upstream = json.loads(Path("/tmp/upstream-result.json").read_text())
+          main_key = upstream["linestart_primary"]
+          reference = upstream["linestart"][main_key]
+          raw = Path("/tmp/upstream-data/ZL3b.txt").read_text(encoding="utf-8", errors="replace")
+          ours = line_start_analysis(raw, definition="pstart", representation="collapsed")
+
+          print("UPSTREAM_COMPUTED")
+          print(json.dumps(reference, indent=2, sort_keys=True))
+          print("OURS")
+          print(json.dumps(ours, indent=2, sort_keys=True))
+          print("UPSTREAM_STATED")
+          print(json.dumps(upstream["stated"], indent=2, sort_keys=True))
+
+          assert ours["n_first"] == reference["n_first"]
+          assert ours["n_other"] == reference["n_other"]
+          for key in ("first", "other", "pooled", "ratio_first_over_other"):
+              assert abs(ours["jsd"][key] - reference["jsd"][key]) < 1e-12, (
+                  key, ours["jsd"][key], reference["jsd"][key]
+              )
+          for pool in ("enrichment_first", "enrichment_other"):
+              for glyph in "ptkfyd":
+                  assert abs(ours[pool][glyph] - reference[pool][glyph]) < 1e-12, (
+                      pool, glyph, ours[pool][glyph], reference[pool][glyph]
+                  )
+          for language in ("A", "B"):
+              for key in ("first", "other"):
+                  assert abs(
+                      ours["jsd_by_language"][language][key]
+                      - reference["jsd_by_language"][language][key]
+                  ) < 1e-12
+
+          # The pinned final driver carries paper-era STATED constants that are
+          # materially different from the values computed by that same driver
+          # on the pinned final ZL3b archive. This assertion makes the mismatch
+          # explicit instead of altering executable code to fit stale constants.
+          stated = upstream["stated"]["jsd"]
+          assert abs(reference["jsd"]["first"] - stated["first"]) > 0.02
+          assert abs(reference["jsd"]["pooled"] - stated["pooled"]) > 0.01
+          PY
