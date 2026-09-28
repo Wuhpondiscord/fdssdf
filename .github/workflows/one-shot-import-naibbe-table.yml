@@ -26,7 +26,7 @@ jobs:
           p = Path("src/voynich_lab/data/naibbe_tables.csv")
           with p.open("r", encoding="utf-8-sig", newline="") as f:
               rows = list(csv.DictReader(f))
-          assert rows, "Naibbe table download was empty"
+          assert len(rows) == 414, f"unexpected Naibbe row count: {len(rows)}"
           assert set(rows[0]) == {"code", "glyphs"}
           assert any(r["code"] == "unigram_alpha_a" and r["glyphs"] == "ol" for r in rows)
           assert any(r["code"] == "suffix_gamma2_z" and r["glyphs"] == "alsy" for r in rows)
@@ -34,7 +34,7 @@ jobs:
           PY
       - name: Commit pinned table
         run: |
-          if git diff --quiet -- src/voynich_lab/data/naibbe_tables.csv; then
+          if [ -z "$(git status --porcelain -- src/voynich_lab/data/naibbe_tables.csv)" ]; then
             echo "No table changes were produced" >&2
             exit 1
           fi
