@@ -29,6 +29,7 @@ This repository is deliberately **not** a "Voynich decipherer." Its current focu
 - **Currier stratification** (`currier.py`): Currier A/B boundary profiles with stratum-local PMI anchors, native `$Q` resampling, and both independent-stratum and joint-quire bootstrap schemes.
 - **Line-start decomposition** (`currier_linestart.py`): paragraph-first versus other-line JSD, six-glyph enrichment, Currier-stratified JSD, relabel nulls, and quire bootstrap, with executable parity checked against the authors' pinned script.
 - **Naibbe meaningful-cipher baseline** (`generators.py`): the paper-facing 52-card `naibbe.py` algorithm, exact 414-row substitution table, isolated seeded RNG, and provenance metadata. CI compares seeded plaintext respacing, canonical ciphertext, final 3%-space-dropped ciphertext, and ambiguity retry count directly against the pinned original implementation.
+- **Timm/Schinner self-citation pseudotext baseline** (`selfcitation_*.py`): the released Java generator is ported through RNG, glyph parsing, can-follow rules, source choice, statistics, slim morphing, and full generator orchestration. Dedicated CI gates compare the Python port against the pinned upstream Java implementation.
 - **Replication gate** (`replication_targets.py`): verified Rozanova & Temerev targets are computed automatically from IVTFF input; separate Parisel statistics remain available for manual comparison.
 - Optional ZeroGPU co-occurrence/PPMI-SVD probe behind an explicit button.
 - Automatic GitHub → Hugging Face Space mirroring.
@@ -166,7 +167,7 @@ Native `$Q` and `$L` metadata are used where present. Currier A/B comparisons ar
 
 Known gaps, in priority order:
 
-1. **Generator library.** The paper-facing Naibbe 52-card baseline is implemented and source-equivalence-checked, and it remains explicitly classified as a meaningful-plaintext cipher rather than a null surrogate. The remaining generator gaps are the Timm/Schinner self-citation pseudotext family and a reproducible Rugg-style grille-cipher implementation; for both, prefer original authors' released code/data over prose-only approximations and preserve the meaningful-cipher versus meaningless-pseudotext distinction.
+1. **Generator library.** The paper-facing Naibbe 52-card meaningful-cipher baseline and the Timm/Schinner meaningless self-citation pseudotext family are both implemented and source-equivalence-checked. The remaining major generator gap is a reproducible Rugg-style grille-cipher implementation sourced from original released code/data rather than a prose-only approximation.
 2. **Consensus segmentation.** BPE is implemented, including paper-exact held-out BPE, but an independent segmental HSMM and motif-discovery path are not yet implemented. A later consensus analysis should report where independent methods agree rather than treating BPE output as identified linguistic units.
 3. **Covariance-aware discrepancy.** `scorecard.py` currently uses the simpler D-infinity / per-feature z-score framework. A Mahalanobis-style statistic needs enough Monte Carlo replicates for stable covariance estimation and validation.
 4. **Sealed-test enforcement.** The code supports held-out analyses, but it does not yet enforce a preregistered fit/validation/sealed partition before generator tuning.

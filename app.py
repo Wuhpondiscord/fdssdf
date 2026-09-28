@@ -14,6 +14,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from voynich_lab.currier_report import build_currier_report
+from voynich_lab.generator_adapters import SELFCITATION_ADAPTER_NAME, selfcitation_reference_matched
+from voynich_lab.generators import generate_naibbe
+from voynich_lab.selfcitation import SelfCitationConfig
+from voynich_lab.selfcitation_generator import generate_selfcitation
 from voynich_lab.discriminator import classifier_two_sample_test
 from voynich_lab.gpu_probe import gpu_cooccurrence_probe
 from voynich_lab.harness import run_harness
@@ -186,6 +190,31 @@ def run_currier_ui(raw_text: str, bootstrap_repetitions: int, seed: int):
     )
 
 
+def run_naibbe_generator_ui(plaintext: str, seed: int):
+    if not plaintext.strip():
+        raise gr.Error("Naibbe requires meaningful plaintext input.")
+    result = generate_naibbe(plaintext, seed=int(seed))
+    return (
+        result.ciphertext,
+        result.canonical_ciphertext,
+        result.respaced_plaintext,
+        json.dumps(result.provenance, indent=2, sort_keys=True),
+    )
+
+
+def run_selfcitation_generator_ui(lines: int, seed: int):
+    line_count = int(lines)
+    config = SelfCitationConfig(lines_to_create=line_count, random_seed=int(seed))
+    result = generate_selfcitation(config, lines_to_create=line_count)
+    summary = {
+        "generated_lines": len(result.lines),
+        "generated_characters": len(result.text),
+        "seed": int(seed),
+        "provenance": result.provenance,
+    }
+    return result.text, json.dumps(summary, indent=2, sort_keys=True)
+
+
 # Every generator exposed to scorecard/discriminator obeys the same
 # (text, seed) -> generated_text contract. Wrappers are explicit here because
 # markov_k/block_shuffle/position_conditioned otherwise have a second
@@ -198,6 +227,7 @@ GENERATOR_CHOICES = {
     "N4 glyph-block shuffle, size 3": lambda t, seed: block_shuffle_surrogate(t, block_size=3, seed=seed),
     "N5 conventional-token shuffle": token_shuffle_surrogate,
     "N6 position-conditioned Markov": lambda t, seed: position_conditioned_markov_surrogate(t, n_bins=10, seed=seed),
+    SELFCITATION_ADAPTER_NAME: selfcitation_reference_matched,
 }
 
 
@@ -473,7 +503,47 @@ with gr.Blocks(title=APP_TITLE) as demo:
         replication_table = gr.Dataframe(label="Manual replication gate", interactive=False)
         replication_btn.click(run_replication_ui, [observed_json, tolerance], replication_table)
 
-    with gr.Tab("9 · Optional ZeroGPU probe"):
+    with gr.Tab("9 · Generator baselines"):
+        gr.Markdown(
+            "Validated hypothesis generators are kept separate from the N0–N6 null ladder. "
+            "Naibbe consumes meaningful plaintext; self-citation generates meaningless-but-structured pseudotext."
+        )
+        with gr.Tab("Self-citation pseudotext"):
+            with gr.Row():
+                sc_gen_lines = gr.Slider(2, 1200, value=120, step=1, label="Lines to generate")
+                sc_gen_seed = gr.Number(value=19, precision=0, label="Pseudo-RNG seed")
+            sc_gen_btn = gr.Button("Generate self-citation baseline", variant="primary")
+            sc_gen_text = gr.Textbox(label="Generated pseudotext", lines=14, interactive=False)
+            sc_gen_meta = gr.Code(label="Generation provenance", language="json")
+            sc_gen_btn.click(
+                run_selfcitation_generator_ui,
+                [sc_gen_lines, sc_gen_seed],
+                [sc_gen_text, sc_gen_meta],
+            )
+            gr.Markdown(
+                "The adversarial-validation dropdown also includes a size-matched self-citation adapter. "
+                "That adapter changes only the pseudo-RNG seed and requested line count; all other released settings remain canonical."
+            )
+
+        with gr.Tab("Naibbe meaningful cipher"):
+            naibbe_plaintext = gr.Textbox(
+                label="Meaningful plaintext",
+                lines=8,
+                placeholder="Paste Latin, Italian, or other alphabetic plaintext to encrypt…",
+            )
+            naibbe_seed = gr.Number(value=0, precision=0, label="Seed")
+            naibbe_btn = gr.Button("Generate Naibbe baseline")
+            naibbe_cipher = gr.Textbox(label="Final ciphertext (3% output-space removal)", lines=10, interactive=False)
+            naibbe_canonical = gr.Textbox(label="Canonical ciphertext before output-space removal", lines=10, interactive=False)
+            naibbe_respaced = gr.Textbox(label="Respaced plaintext n-grams", lines=8, interactive=False)
+            naibbe_meta = gr.Code(label="Generation provenance", language="json")
+            naibbe_btn.click(
+                run_naibbe_generator_ui,
+                [naibbe_plaintext, naibbe_seed],
+                [naibbe_cipher, naibbe_canonical, naibbe_respaced, naibbe_meta],
+            )
+
+    with gr.Tab("10 · Optional ZeroGPU probe"):
         gr.Markdown("This remains the only path that requests ZeroGPU. It is never invoked by loading, parsing, null generation, BPE, or the standard statistical tests.")
         with gr.Row():
             gpu_window = gr.Slider(1, 32, value=5, step=1, label="Context window")
@@ -483,7 +553,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
         gpu_table = gr.Dataframe(label="Glyph frequencies", interactive=False)
         gpu_btn.click(run_gpu_ui, [text_state, gpu_window, gpu_max], [gpu_json, gpu_table])
 
-    with gr.Tab("10 · Hugging Face sync"):
+    with gr.Tab("11 · Hugging Face sync"):
         gr.Markdown("GitHub `main` remains the source of truth. The workflow mirrors pushes to Hugging Face; this button is a recovery path.")
         hf_target = gr.Textbox(label="HF Space URL or repo", value=configured_space_value())
         sync_check = gr.Button("Check sync configuration")
