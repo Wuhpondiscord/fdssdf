@@ -75,7 +75,7 @@ jobs:
               currier_bootstrap_table = gr.Dataframe(label="A−B quire-bootstrap intervals", interactive=False)
               currier_interpretation = gr.Textbox(label="Interpretation", lines=5, interactive=False)
               gr.Markdown(
-                  "#### Line-start executable reproduction vs bundled STATED constants\n"
+                  "#### Line-start executable reproduction vs bundled STATED constants\\n"
                   "These tables reproduce the authors' pinned final executable. They deliberately show its output next to the "
                   "same upstream file's older hard-coded STATED constants rather than forcing one to match the other."
               )
