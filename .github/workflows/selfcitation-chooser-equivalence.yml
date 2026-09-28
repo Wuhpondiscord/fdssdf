@@ -1,0 +1,268 @@
+name: Self-citation Page Chooser Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "src/voynich_lab/selfcitation_chooser.py"
+      - "tests/test_selfcitation.py"
+      - "tests/test_selfcitation_chooser.py"
+      - ".github/workflows/selfcitation-chooser-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  page-chooser-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream chooser dependencies
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          root=/tmp/chooser/de/voynich/text
+          mkdir -p "$root/sourcechooser" "$root/util/random" "$root/util"
+          for file in Glyph.java GlyphGroup.java Substitution.java Constants.java; do
+            curl -fsSL "${base}/de/voynich/text/${file}" -o "$root/${file}"
+          done
+          curl -fsSL "${base}/de/voynich/text/util/Converter.java" -o "$root/util/Converter.java"
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o "$root/util/random/I_RandomNumberGenerator.java"
+          for file in ChooserHelper.java I_SourceGroupChooser.java PageSourceGroupChooser.java; do
+            curl -fsSL "${base}/de/voynich/text/sourcechooser/${file}" -o "$root/sourcechooser/${file}"
+          done
+
+      - name: Add controlled Java stubs and parity probe
+        run: |
+          set -euo pipefail
+          root=/tmp/chooser/de/voynich/text
+          cat > "$root/util/Config.java" <<'JAVA'
+          package de.voynich.text.util;
+          public final class Config {
+              public static int methodSourceChooserSamePositionProbability = 28;
+          }
+          JAVA
+
+          cat > "$root/SelfCitationTextGenerator.java" <<'JAVA'
+          package de.voynich.text;
+          public final class SelfCitationTextGenerator {
+              public enum CURRIER { A, B }
+          }
+          JAVA
+
+          cat > "$root/StatisticHelper.java" <<'JAVA'
+          package de.voynich.text;
+          import java.util.*;
+          public class StatisticHelper {
+              public Map<GlyphGroup,Long> validGroupDictionary = new HashMap<>();
+              public int linesInPage = 0;
+              private int suggestionsProbability = 40;
+              private List<GlyphGroup> suggestedGroups = new ArrayList<>();
+              public boolean hasSuggestedGroups() { return !suggestedGroups.isEmpty(); }
+              public int getSuggestionsProbability() { return suggestionsProbability; }
+              public List<GlyphGroup> suggestGroups() { return new ArrayList<>(suggestedGroups); }
+              public void setSuggestions(int probability, GlyphGroup... groups) {
+                  suggestionsProbability = probability;
+                  suggestedGroups = new ArrayList<>(Arrays.asList(groups));
+              }
+          }
+          JAVA
+
+          cat > "$root/sourcechooser/ChooserParity.java" <<'JAVA'
+          package de.voynich.text.sourcechooser;
+
+          import de.voynich.text.*;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          import java.util.*;
+
+          public class ChooserParity {
+              static class TraceRandom implements I_RandomNumberGenerator {
+                  final Random random;
+                  final List<String> trace = new ArrayList<>();
+                  TraceRandom(long seed) { random = new Random(seed); }
+                  public int rand(int max) {
+                      int value = max == 0 ? 0 : random.nextInt(max);
+                      trace.add(max + "=" + value);
+                      return value;
+                  }
+              }
+
+              static GlyphGroup g(String value) {
+                  return new GlyphGroup(value, GlyphGroup.GENERATE_TYPE.INITIAL);
+              }
+
+              static List<GlyphGroup> line(String... values) {
+                  List<GlyphGroup> ret = new ArrayList<>();
+                  for (String value : values) ret.add(g(value));
+                  return ret;
+              }
+
+              static StatisticHelper stats(int linesInPage) {
+                  StatisticHelper stats = new StatisticHelper();
+                  stats.linesInPage = linesInPage;
+                  String[] words = {"pchal","daiin","chedy","chol","qotchedy","shedy","ol","lkar","okeor"};
+                  for (String word : words) stats.validGroupDictionary.put(g(word), 1L);
+                  return stats;
+              }
+
+              static String joinGroups(Collection<GlyphGroup> groups) {
+                  List<String> values = new ArrayList<>();
+                  for (GlyphGroup group : groups) values.add(group.toString());
+                  return String.join(",", values);
+              }
+
+              static void run(
+                  String name,
+                  long seed,
+                  List<List<GlyphGroup>> generated,
+                  List<List<GlyphGroup>> paragraphs,
+                  List<GlyphGroup> actual,
+                  StatisticHelper stats,
+                  boolean paragraphInitial,
+                  boolean lineInitial,
+                  int initialLineCount
+              ) {
+                  TraceRandom rng = new TraceRandom(seed);
+                  PageSourceGroupChooser chooser = new PageSourceGroupChooser(rng, SelfCitationTextGenerator.CURRIER.B);
+                  String keyOrder = joinGroups(stats.validGroupDictionary.keySet());
+                  List<GlyphGroup> selected = chooser.chooseSourceGroup(
+                      generated, paragraphs, actual, stats, paragraphInitial, lineInitial, initialLineCount
+                  );
+                  System.out.println(
+                      name + "\t" + keyOrder + "\t" + joinGroups(selected) + "\t" + String.join(",", rng.trace)
+                  );
+              }
+
+              public static void main(String[] args) {
+                  run("random", 19L,
+                      new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
+                      stats(0), false, true, 1);
+
+                  run("local", 55L,
+                      Arrays.asList(
+                          line("daiin","ol","chedy"),
+                          line("chol","qotchedy","lkar"),
+                          line("pchal","shedy","okeor")
+                      ),
+                      new ArrayList<>(), line("daiin"), stats(5), false, false, 1);
+
+                  run("paragraph", 1L,
+                      Arrays.asList(line("daiin")),
+                      Arrays.asList(line("pchal","daiin"), line("tchedy","chol")),
+                      new ArrayList<>(), stats(2), true, true, 1);
+
+                  StatisticHelper suggestionOne = stats(3);
+                  suggestionOne.setSuggestions(100, g("pchal"));
+                  run("suggestion_one", 0L,
+                      Arrays.asList(line("daiin")), new ArrayList<>(), new ArrayList<>(),
+                      suggestionOne, false, false, 1);
+
+                  StatisticHelper suggestionTwo = stats(3);
+                  suggestionTwo.setSuggestions(100, g("daiin"), g("chedy"));
+                  run("suggestion_two", 0L,
+                      Arrays.asList(line("daiin")), new ArrayList<>(), new ArrayList<>(),
+                      suggestionTwo, false, false, 1);
+              }
+          }
+          JAVA
+
+      - name: Compile and run pinned upstream chooser
+        run: |
+          set -euo pipefail
+          javac $(find /tmp/chooser -name '*.java' -print)
+          java -cp /tmp/chooser de.voynich.text.sourcechooser.ChooserParity > /tmp/java_chooser.tsv
+          cat /tmp/java_chooser.tsv
+
+      - name: Run Python chooser on identical controlled scenarios
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_chooser.tsv
+          from voynich_lab.selfcitation import GlyphGroup, JavaRandom
+          from voynich_lab.selfcitation_chooser import (
+              ChooserStatisticsSnapshot,
+              JavaGlyphGroupMap,
+              PageSourceGroupChooser,
+          )
+
+          class TraceRandom:
+              def __init__(self, seed):
+                  self.inner = JavaRandom(seed)
+                  self.trace = []
+              def rand(self, maximum):
+                  value = self.inner.rand(maximum)
+                  self.trace.append(f"{maximum}={value}")
+                  return value
+
+          WORDS = ["pchal","daiin","chedy","chol","qotchedy","shedy","ol","lkar","okeor"]
+
+          def line(*values):
+              return [GlyphGroup(value) for value in values]
+
+          def stats(lines_in_page):
+              dictionary = JavaGlyphGroupMap()
+              for word in WORDS:
+                  dictionary.put(GlyphGroup(word), 1)
+              return ChooserStatisticsSnapshot(
+                  valid_group_dictionary=dictionary,
+                  lines_in_page=lines_in_page,
+              )
+
+          def run(name, seed, generated, paragraphs, actual, statistics, paragraph_initial, line_initial, initial_count):
+              rng = TraceRandom(seed)
+              chooser = PageSourceGroupChooser(rng)
+              key_order = ",".join(str(group) for group in statistics.valid_group_dictionary.key_set())
+              selected = chooser.choose_source_group(
+                  generated, paragraphs, actual, statistics,
+                  paragraph_initial, line_initial, initial_count,
+              )
+              print(
+                  "\t".join((
+                      name,
+                      key_order,
+                      ",".join(str(group) for group in selected),
+                      ",".join(rng.trace),
+                  ))
+              )
+
+          run("random", 19, [], [], [], stats(0), False, True, 1)
+          run(
+              "local", 55,
+              [
+                  line("daiin","ol","chedy"),
+                  line("chol","qotchedy","lkar"),
+                  line("pchal","shedy","okeor"),
+              ],
+              [], line("daiin"), stats(5), False, False, 1,
+          )
+          run(
+              "paragraph", 1,
+              [line("daiin")],
+              [line("pchal","daiin"), line("tchedy","chol")],
+              [], stats(2), True, True, 1,
+          )
+          one = stats(3)
+          one.suggestions_probability = 100
+          one.suggested_groups = [GlyphGroup("pchal")]
+          run("suggestion_one", 0, [line("daiin")], [], [], one, False, False, 1)
+          two = stats(3)
+          two.suggestions_probability = 100
+          two.suggested_groups = [GlyphGroup("daiin"), GlyphGroup("chedy")]
+          run("suggestion_two", 0, [line("daiin")], [], [], two, False, False, 1)
+          PY
+          cat /tmp/python_chooser.tsv
+
+      - name: Require byte-for-byte chooser and RNG-trace parity
+        run: |
+          set -euo pipefail
+          diff -u /tmp/java_chooser.tsv /tmp/python_chooser.tsv
+          echo "Python PageSourceGroupChooser matches pinned upstream Java in all controlled modes"
