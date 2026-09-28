@@ -1,0 +1,61 @@
+name: Currier Bootstrap Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/currier.py"
+      - "tests/test_currier.py"
+      - ".github/workflows/currier-bootstrap-integration.yml"
+  pull_request:
+    paths:
+      - "src/voynich_lab/currier.py"
+      - "tests/test_currier.py"
+      - ".github/workflows/currier-bootstrap-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install NumPy
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy>=1.26,<3"
+      - name: Download pinned ZL3b transcription
+        run: |
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/lrozanova/voynich-units/956a7c4fc39981f4d116fa3f4edfccce6d065571/voynich_decipherment_repro_bundle/voynich_calibration_sources/ZL3b.txt" \
+            --output /tmp/ZL3b.txt
+          test -s /tmp/ZL3b.txt
+      - name: Reproduce 1500-draw Currier quire bootstrap
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from voynich_lab.currier import currier_ab_bootstrap
+
+          raw = Path("/tmp/ZL3b.txt").read_text(encoding="utf-8", errors="replace")
+          result = currier_ab_bootstrap(raw, repetitions=1500, seed=20260808)
+          print(json.dumps(result, indent=2, sort_keys=True))
+
+          independent = result["independent_strata"]["uncertain"]["ci90"]
+          # The released reproduction script states [-0.052, +0.037]. The
+          # archive prints rounded values, so permit only rounding-scale drift.
+          assert abs(independent[0] - (-0.052)) <= 0.004, independent
+          assert abs(independent[1] - 0.037) <= 0.004, independent
+          assert result["independent_strata"]["uncertain"]["valid_draws"] == 1500
+          assert result["joint_quires"]["uncertain"]["valid_draws"] == 1500
+          PY
