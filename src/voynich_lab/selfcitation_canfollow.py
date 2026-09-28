@@ -38,7 +38,9 @@ _BEFORE_GALLOW_TOKENS = ("", "a", "e", "o", "l", "y", "h")
 
 _AOY_TOKENS = ("a", "o", "y")
 _RMNG_TOKENS = ("r", "m", "n", "g")
-_COMBINABLE_LIGATURES = ("ol", "or", "al", "ar")
+# This is Glyph.allCombinableLigature, not the narrower combinableLigature map.
+# The released source includes word-final om/am alongside ol/or/al/ar.
+_COMBINABLE_LIGATURES = ("ol", "al", "or", "ar", "om", "am")
 
 
 def _starts_with_any(text: str, candidates: tuple[str, ...]) -> bool:
