@@ -1,0 +1,298 @@
+name: Self-citation Statistics Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "src/voynich_lab/selfcitation_chooser.py"
+      - "src/voynich_lab/selfcitation_canfollow.py"
+      - "src/voynich_lab/selfcitation_statistics.py"
+      - "tests/test_selfcitation_statistics.py"
+      - ".github/workflows/selfcitation-statistics-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  statistics-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream statistics dependencies
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          root=/tmp/stats/de/voynich/text
+          mkdir -p "$root/canfollow" "$root/util/random" "$root/util"
+          for file in Glyph.java GlyphGroup.java Substitution.java StatisticHelper.java; do
+            curl -fsSL "${base}/de/voynich/text/${file}" -o "$root/${file}"
+          done
+          for file in Converter.java StringUtil.java; do
+            curl -fsSL "${base}/de/voynich/text/util/${file}" -o "$root/util/${file}"
+          done
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o "$root/util/random/I_RandomNumberGenerator.java"
+          for file in I_CanFollow.java CurveLineCanFollow.java; do
+            curl -fsSL "${base}/de/voynich/text/canfollow/${file}" -o "$root/canfollow/${file}"
+          done
+
+      - name: Add released-config stubs and Java statistics probe
+        run: |
+          set -euo pipefail
+          root=/tmp/stats/de/voynich/text
+
+          cat > "$root/util/Config.java" <<'JAVA'
+          package de.voynich.text.util;
+          public final class Config {
+              public static boolean useWordFinalSubstitutions = true;
+              public static float I_MIN_PERCENTAGE = 0.20f;
+              public static float OL_MIN_PERCENTAGE = 0.25f;
+              public static float DY_MIN_PERCENTAGE = 0.25f;
+          }
+          JAVA
+
+          cat > "$root/SelfCitationTextGenerator.java" <<'JAVA'
+          package de.voynich.text;
+          public final class SelfCitationTextGenerator {
+              public enum CURRIER { A, B }
+          }
+          JAVA
+
+          cat > "$root/Constants.java" <<'JAVA'
+          package de.voynich.text;
+          public final class Constants {
+              public static final String ENTER = "\n";
+              static final GlyphGroup DAIIN_GLYPH_GROUP  = new GlyphGroup("daiin",  GlyphGroup.GENERATE_TYPE.INITIAL);
+              static final GlyphGroup CHOL_GLYPH_GROUP   = new GlyphGroup("chol",   GlyphGroup.GENERATE_TYPE.INITIAL);
+              static final GlyphGroup OL_GLYPH_GROUP     = new GlyphGroup("ol",     GlyphGroup.GENERATE_TYPE.INITIAL);
+              static final GlyphGroup CHEDY_GLYPH_GROUP  = new GlyphGroup("chedy",  GlyphGroup.GENERATE_TYPE.INITIAL);
+              static final GlyphGroup CHEODY_GLYPH_GROUP = new GlyphGroup("cheody", GlyphGroup.GENERATE_TYPE.INITIAL);
+          }
+          JAVA
+
+          cat > "$root/canfollow/VoynichCanFollow.java" <<'JAVA'
+          package de.voynich.text.canfollow;
+          import de.voynich.text.GlyphGroup;
+          public class VoynichCanFollow implements I_CanFollow {
+              public boolean canFollowEachOtherBefore(String a, String b, GlyphGroup g) { return true; }
+              public boolean canFollowEachOtherAfter(String a, String b, GlyphGroup g) { return true; }
+              public boolean canFollowToInitalGlyph(String a, String b, GlyphGroup g) { return true; }
+              public boolean isValid(GlyphGroup g) { return true; }
+              public boolean hasValidStartGlyph(GlyphGroup g) { return true; }
+          }
+          JAVA
+
+          cat > "$root/StatisticsParity.java" <<'JAVA'
+          package de.voynich.text;
+
+          import de.voynich.text.canfollow.CurveLineCanFollow;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          import java.util.*;
+
+          public class StatisticsParity {
+              static class QueueRandom implements I_RandomNumberGenerator {
+                  final ArrayDeque<Integer> values = new ArrayDeque<>();
+                  final List<String> trace = new ArrayList<>();
+                  QueueRandom(int... input) { for (int value : input) values.add(value); }
+                  public int rand(int max) {
+                      if (values.isEmpty()) throw new IllegalStateException("unexpected rand(" + max + ")");
+                      int value = values.removeFirst();
+                      if (value < 0 || value >= max) throw new IllegalStateException("bad queued value");
+                      trace.add(max + "=" + value);
+                      return value;
+                  }
+                  String trace() { return String.join(",", trace); }
+              }
+
+              static GlyphGroup g(String text) {
+                  return new GlyphGroup(text, GlyphGroup.GENERATE_TYPE.INITIAL);
+              }
+
+              static StatisticHelper helper(QueueRandom rng, StatisticHelper.SUGGEST_METHOD method) {
+                  return new StatisticHelper(
+                      SelfCitationTextGenerator.CURRIER.B,
+                      rng,
+                      new CurveLineCanFollow(),
+                      method,
+                      40
+                  );
+              }
+
+              static String groups(Collection<GlyphGroup> values) {
+                  List<String> out = new ArrayList<>();
+                  for (GlyphGroup group : values) out.add(group.glyphGroup);
+                  return String.join(",", out);
+              }
+
+              static String map(Map<GlyphGroup, Long> values) {
+                  List<String> out = new ArrayList<>();
+                  for (Map.Entry<GlyphGroup, Long> entry : values.entrySet()) {
+                      out.add(entry.getKey().glyphGroup + "=" + entry.getValue());
+                  }
+                  return String.join(",", out);
+              }
+
+              static String suggested(List<GlyphGroup> values) {
+                  return groups(values);
+              }
+
+              static void state(String label, StatisticHelper h) {
+                  System.out.println(
+                      "S\t" + label + "\t" +
+                      h.statTokens + "," + h.statTokensI + "," + h.statTokensDy + "," + h.statTokensOl + "," +
+                      h.repeatedTokensI + "," + h.repeatedTokensDy + "," + h.repeatedTokensOl + "," + h.repeatedTokensUnknown + "," +
+                      h.linesInPage + "," + h.linesInParagraph +
+                      "\tV=" + map(h.validGroupDictionary) +
+                      "\tA=" + map(h.allGroupMap) +
+                      "\tPI=" + map(h.usageIMapForPage) +
+                      "\tPD=" + map(h.usageDyMapForPage) +
+                      "\tPO=" + map(h.usageOlMapForPage)
+                  );
+              }
+
+              public static void main(String[] args) {
+                  QueueRandom topRng = new QueueRandom();
+                  StatisticHelper top = helper(topRng, StatisticHelper.SUGGEST_METHOD.TOP_TOKEN);
+                  System.out.println("E\t" + Float.isNaN(top.getPercentageI()) + "," + Float.isNaN(top.getPercentageDy()) + "," + Float.isNaN(top.getPercentageOl()) + "\t" + top.hasSuggestedGroups() + "\t" + suggested(top.suggestGroups()));
+
+                  String[] sequence = {"daiin", "shedy", "chol", "qok", "qokaiin", "qokaiin"};
+                  for (String word : sequence) {
+                      top.remember(g(word));
+                      state(word, top);
+                  }
+                  System.out.println("TOP\t" + top.hasSuggestedGroups() + "\t" + suggested(top.suggestGroups()));
+                  System.out.println("FORCE\t12\t" + suggested(top.suggestGroupsForce(12)));
+                  System.out.println("FORCE\t13\t" + suggested(top.suggestGroupsForce(13)));
+                  System.out.println("FORCE\t14\t" + suggested(top.suggestGroupsForce(14)));
+                  top.newLine();
+                  top.newLine();
+                  state("lines", top);
+                  top.newPage();
+                  state("newpage", top);
+                  System.out.println("TOPPAGE\t" + suggested(top.suggestGroups()));
+
+                  QueueRandom randomRng = new QueueRandom(1, 0);
+                  StatisticHelper random = helper(randomRng, StatisticHelper.SUGGEST_METHOD.RANDOM);
+                  random.remember(g("daiin"));
+                  random.remember(g("qokaiin"));
+                  for (int i = 0; i < 9; i++) random.remember(g("qok"));
+                  System.out.println("SET\tP=" + groups(random.groupIListForPage) + "\tD=" + groups(random.groupIListForDoc));
+                  System.out.println("RANDOM\tpage\t" + suggested(random.suggestGroups()) + "\t" + randomRng.trace());
+                  random.newPage();
+                  System.out.println("RANDOM\tdoc\t" + suggested(random.suggestGroups()) + "\t" + randomRng.trace());
+              }
+          }
+          JAVA
+
+      - name: Compile and run pinned upstream statistics probe
+        run: |
+          set -euo pipefail
+          javac $(find /tmp/stats -name '*.java' -print)
+          java -cp /tmp/stats de.voynich.text.StatisticsParity > /tmp/java_stats.tsv
+          cat /tmp/java_stats.tsv
+
+      - name: Run Python statistics probe on identical state transitions
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_stats.tsv
+          import math
+          from voynich_lab.selfcitation import GlyphGroup
+          from voynich_lab.selfcitation_canfollow import CurveLineCanFollow
+          from voynich_lab.selfcitation_statistics import StatisticHelper, SuggestMethod
+
+          class QueueRandom:
+              def __init__(self, *values):
+                  self.values = list(values)
+                  self.trace_values = []
+              def rand(self, maximum):
+                  if not self.values:
+                      raise RuntimeError(f"unexpected rand({maximum})")
+                  value = self.values.pop(0)
+                  if not 0 <= value < maximum:
+                      raise RuntimeError("bad queued value")
+                  self.trace_values.append(f"{maximum}={value}")
+                  return value
+              def trace(self):
+                  return ",".join(self.trace_values)
+
+          def helper(rng, method):
+              return StatisticHelper(
+                  "B", rng, CurveLineCanFollow(use_word_final_substitutions=True), method, 40
+              )
+
+          def boolean(value):
+              return str(bool(value)).lower()
+
+          def groups(values):
+              return ",".join(group.glyph_group for group in values)
+
+          def map_values(values):
+              return ",".join(
+                  f"{group.glyph_group}={values.get(group)}" for group in values.key_set()
+              )
+
+          def state(label, h):
+              counters = ",".join(str(value) for value in (
+                  h.stat_tokens, h.stat_tokens_i, h.stat_tokens_dy, h.stat_tokens_ol,
+                  h.repeated_tokens_i, h.repeated_tokens_dy, h.repeated_tokens_ol, h.repeated_tokens_unknown,
+                  h.lines_in_page, h.lines_in_paragraph,
+              ))
+              print(
+                  f"S\t{label}\t{counters}"
+                  f"\tV={map_values(h.valid_group_dictionary)}"
+                  f"\tA={map_values(h.all_group_map)}"
+                  f"\tPI={map_values(h.usage_i_map_for_page)}"
+                  f"\tPD={map_values(h.usage_dy_map_for_page)}"
+                  f"\tPO={map_values(h.usage_ol_map_for_page)}"
+              )
+
+          top_rng = QueueRandom()
+          top = helper(top_rng, SuggestMethod.TOP_TOKEN)
+          print(
+              "E\t" + ",".join((
+                  boolean(math.isnan(top.get_percentage_i())),
+                  boolean(math.isnan(top.get_percentage_dy())),
+                  boolean(math.isnan(top.get_percentage_ol())),
+              )) + f"\t{boolean(top.has_suggested_groups())}\t{groups(top.suggest_groups())}"
+          )
+
+          for word in ("daiin", "shedy", "chol", "qok", "qokaiin", "qokaiin"):
+              top.remember(GlyphGroup(word))
+              state(word, top)
+          print(f"TOP\t{boolean(top.has_suggested_groups())}\t{groups(top.suggest_groups())}")
+          for value in (12, 13, 14):
+              print(f"FORCE\t{value}\t{groups(top.suggest_groups_force(value))}")
+          top.new_line()
+          top.new_line()
+          state("lines", top)
+          top.new_page()
+          state("newpage", top)
+          print(f"TOPPAGE\t{groups(top.suggest_groups())}")
+
+          random_rng = QueueRandom(1, 0)
+          random = helper(random_rng, SuggestMethod.RANDOM)
+          random.remember(GlyphGroup("daiin"))
+          random.remember(GlyphGroup("qokaiin"))
+          for _ in range(9):
+              random.remember(GlyphGroup("qok"))
+          print(f"SET\tP={groups(random.group_i_list_for_page.key_set())}\tD={groups(random.group_i_list_for_doc.key_set())}")
+          print(f"RANDOM\tpage\t{groups(random.suggest_groups())}\t{random_rng.trace()}")
+          random.new_page()
+          print(f"RANDOM\tdoc\t{groups(random.suggest_groups())}\t{random_rng.trace()}")
+          PY
+          cat /tmp/python_stats.tsv
+
+      - name: Require byte-for-byte statistics and RNG-trace parity
+        run: |
+          set -euo pipefail
+          diff -u /tmp/java_stats.tsv /tmp/python_stats.tsv
+          echo "Python StatisticHelper matches pinned upstream Java state, ordering, suggestions, and RNG traces"
