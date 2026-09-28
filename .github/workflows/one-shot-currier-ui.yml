@@ -18,6 +18,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent, indent
 
           path = Path("app.py")
           text = path.read_text()
@@ -33,7 +34,8 @@ jobs:
 
           function_marker = "# Every generator exposed to scorecard/discriminator obeys the same\n"
           assert text.count(function_marker) == 1, "unexpected generator marker"
-          function = '''def run_currier_ui(raw_text: str, bootstrap_repetitions: int, seed: int):
+          function = dedent('''\
+          def run_currier_ui(raw_text: str, bootstrap_repetitions: int, seed: int):
               if not raw_text.strip() or not is_ivtff(raw_text):
                   raise gr.Error("Currier analysis requires IVTFF input with native $L and $Q metadata.")
               try:
@@ -55,12 +57,13 @@ jobs:
               )
 
 
-          '''
+          ''')
           text = text.replace(function_marker, function + function_marker, 1)
 
           tab_marker = '    with gr.Tab("5 · Long-range structure"):\n'
           assert text.count(tab_marker) == 1, "unexpected long-range tab marker"
-          currier_tab = '''    with gr.Tab("5 · Currier A/B"):
+          currier_tab = indent(dedent('''\
+          with gr.Tab("5 · Currier A/B"):
               gr.Markdown(
                   "Currier A/B boundary profiles use separate within-stratum PMI scales. "
                   "A−B uncertainty is resampled by native quire under both independent-stratum and joint-quire schemes; "
@@ -96,7 +99,7 @@ jobs:
                   ],
               )
 
-          '''
+          '''), "    ")
           text = text.replace(tab_marker, currier_tab + '    with gr.Tab("6 · Long-range structure"):\n', 1)
 
           renames = {
