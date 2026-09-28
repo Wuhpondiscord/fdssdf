@@ -1,3 +1,5 @@
+from collections import Counter
+import math
 from pathlib import Path
 import sys
 
@@ -9,7 +11,6 @@ from voynich_lab.currier_linestart import (
     jensen_shannon_divergence,
     line_start_analysis,
 )
-from collections import Counter
 
 RAW = """#=IVTFF Eva- 2.0
 <f1r> <! $Q=1 $L=A $H=1 >
@@ -25,6 +26,12 @@ RAW = """#=IVTFF Eva- 2.0
 <f4r.1,@P0;U> <%> fora.keda.pora.tyda
 <f4r.2,+P0;U> tora.deda.kora.yora
 """
+
+
+def _same_number(left: float, right: float) -> bool:
+    if math.isnan(left) and math.isnan(right):
+        return True
+    return left == right
 
 
 def test_jsd_is_symmetric_and_zero_for_identical_distributions():
@@ -73,7 +80,28 @@ def test_line_start_null_and_quire_bootstrap_are_deterministic():
         bootstrap_repetitions=20,
         seed=9,
     )
-    assert first == second
+
+    assert first["definition"] == second["definition"]
+    assert first["representation"] == second["representation"]
+    assert first["n_lines"] == second["n_lines"]
+    assert first["n_first"] == second["n_first"]
+    assert first["n_other"] == second["n_other"]
+
+    for key in ("pooled", "first", "other", "ratio_first_over_other"):
+        assert _same_number(first["jsd"][key], second["jsd"][key])
+    for pool in ("enrichment_first", "enrichment_other"):
+        for glyph in GLYPHS:
+            assert _same_number(first[pool][glyph], second[pool][glyph])
+    for key in ("pooled", "first", "other"):
+        assert _same_number(first["relabel_null"][key], second["relabel_null"][key])
+    for key in ("difference_first_minus_other",):
+        assert _same_number(first["quire_bootstrap"][key], second["quire_bootstrap"][key])
+    for key in ("difference_ci95", "first_ci95", "other_ci95"):
+        assert all(
+            _same_number(left, right)
+            for left, right in zip(first["quire_bootstrap"][key], second["quire_bootstrap"][key])
+        )
+
     assert first["relabel_null"]["draws"] == 20
     assert first["quire_bootstrap"]["draws"] == 20
     low, high = first["quire_bootstrap"]["difference_ci95"]
