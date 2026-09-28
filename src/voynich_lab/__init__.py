@@ -3,6 +3,7 @@
 __all__ = [
     "metrics",
     "segmentation",
+    "unigram_segmentation",
     "surrogates",
     "harness",
     "gpu_probe",

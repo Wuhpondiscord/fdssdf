@@ -29,6 +29,7 @@ from voynich_lab.published_replication import automatic_replication_metrics, uni
 from voynich_lab.replication_targets import compare_to_targets
 from voynich_lab.scorecard import scorecard_to_rows, run_scorecard
 from voynich_lab.segmentation import cross_fit_bpe_scale_curve, discover_bpe_units
+from voynich_lab.unigram_segmentation import segmentation_consensus
 from voynich_lab.surrogates import (
     block_shuffle_surrogate,
     iid_glyph_surrogate,
@@ -118,6 +119,46 @@ def run_bpe_crossfit_ui(raw_text: str):
         for row in rows
     ]
     return pd.DataFrame(table_rows), f"Held-out minimum among 0/16/32/64 merges: {selected}"
+
+
+def run_segmentation_consensus_ui(
+    text: str,
+    bpe_merges: int,
+    max_unit_length: int,
+    min_count: int,
+    max_vocab: int,
+    iterations: int,
+    length_penalty_bits: float,
+):
+    if not text.strip():
+        raise gr.Error("Load a transcription first.")
+    try:
+        result = segmentation_consensus(
+            text,
+            bpe_merges=int(bpe_merges),
+            max_unit_length=int(max_unit_length),
+            min_count=int(min_count),
+            max_vocab=int(max_vocab),
+            iterations=int(iterations),
+            length_penalty_bits=float(length_penalty_bits),
+            preview_lines=12,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise gr.Error(str(exc)) from exc
+
+    summary = pd.DataFrame(
+        [{"metric": key, "value": value} for key, value in result.summary.items()]
+    )
+    lines = pd.DataFrame(result.line_rows)
+    units = pd.DataFrame(result.unit_rows)
+    note = (
+        f"Exploratory consensus only: unigram latent model vocabulary={result.model.vocabulary_size}, "
+        f"EM iterations={result.model.iterations_run}; line-bounded BPE rules={len(result.bpe_rules)}. "
+        "Both models see the same space-erased glyph lines. Transcription spaces are withheld from fitting "
+        "and used only afterward as boundary observations. Shared boundaries are candidates for follow-up, "
+        "not identified linguistic morphemes or words."
+    )
+    return summary, lines, units, result.preview, note
 
 
 def run_gpu_ui(text: str, window: int, max_symbols: int):
@@ -390,6 +431,46 @@ with gr.Blocks(title=APP_TITLE) as demo:
         crossfit_table = gr.Dataframe(label="Held-out unit-scale statistics", interactive=False)
         crossfit_selected = gr.Textbox(label="Selected held-out scale", interactive=False)
         crossfit_btn.click(run_bpe_crossfit_ui, raw_state, [crossfit_table, crossfit_selected])
+
+        gr.Markdown(
+            "#### Independent boundary consensus (exploratory)\n"
+            "This path does **not** use spaces as hard word boundaries. A finite unigram latent-unit model "
+            "and a separate line-bounded BPE are fit to the same space-erased glyph lines; observed spaces "
+            "are compared to inferred boundaries only after fitting."
+        )
+        with gr.Row():
+            consensus_bpe_merges = gr.Slider(0, 128, value=32, step=1, label="Comparator BPE merges")
+            consensus_max_len = gr.Slider(2, 12, value=8, step=1, label="Max unigram unit length")
+            consensus_min_count = gr.Slider(1, 10, value=2, step=1, label="Min recurring substring count")
+        with gr.Row():
+            consensus_vocab = gr.Slider(64, 2048, value=512, step=64, label="Unigram candidate vocabulary cap")
+            consensus_iterations = gr.Slider(2, 30, value=10, step=1, label="EM iterations")
+            consensus_length_penalty = gr.Slider(0.0, 2.0, value=0.0, step=0.05, label="Long-unit penalty (bits per extra glyph)")
+        consensus_btn = gr.Button("Run independent segmentation consensus")
+        consensus_summary = gr.Dataframe(label="Boundary-consensus summary", interactive=False)
+        consensus_lines = gr.Dataframe(label="Per-line boundary agreement", interactive=False)
+        consensus_units = gr.Dataframe(label="Top units by method", interactive=False)
+        consensus_preview = gr.Textbox(label="Segmentation preview", lines=16, interactive=False)
+        consensus_note = gr.Textbox(label="Interpretation guardrail", lines=5, interactive=False)
+        consensus_btn.click(
+            run_segmentation_consensus_ui,
+            [
+                text_state,
+                consensus_bpe_merges,
+                consensus_max_len,
+                consensus_min_count,
+                consensus_vocab,
+                consensus_iterations,
+                consensus_length_penalty,
+            ],
+            [
+                consensus_summary,
+                consensus_lines,
+                consensus_units,
+                consensus_preview,
+                consensus_note,
+            ],
+        )
 
     with gr.Tab("4 · IVTFF audit"):
         gr.Markdown("Native IVTFF page variables such as `$Q`, `$L`, `$H`, and `$I` are parsed directly when present. External maps are only a fallback.")
