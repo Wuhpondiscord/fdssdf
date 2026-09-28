@@ -65,6 +65,27 @@ def test_unit_boundaries_use_glyph_offsets_not_token_indices():
     assert unit_boundaries(("ab", "c", "def")) == frozenset({2, 3})
 
 
+def _assert_mapping_equal_nan_aware(left, right):
+    assert set(left) == set(right)
+    for key in left:
+        left_value = left[key]
+        right_value = right[key]
+        if (
+            isinstance(left_value, float)
+            and isinstance(right_value, float)
+            and math.isnan(left_value)
+            and math.isnan(right_value)
+        ):
+            continue
+        assert left_value == right_value, key
+
+
+def _assert_row_sequences_equal_nan_aware(left_rows, right_rows):
+    assert len(left_rows) == len(right_rows)
+    for left, right in zip(left_rows, right_rows):
+        _assert_mapping_equal_nan_aware(left, right)
+
+
 def test_segmentation_consensus_reports_method_and_space_agreement():
     text = "ab ab ab\nab ab ab\nxy xy xy\nxy xy xy\n"
     first = segmentation_consensus(
@@ -84,9 +105,9 @@ def test_segmentation_consensus_reports_method_and_space_agreement():
         preview_lines=2,
     )
 
-    assert first.summary == second.summary
-    assert first.line_rows == second.line_rows
-    assert first.unit_rows == second.unit_rows
+    _assert_mapping_equal_nan_aware(first.summary, second.summary)
+    _assert_row_sequences_equal_nan_aware(first.line_rows, second.line_rows)
+    _assert_row_sequences_equal_nan_aware(first.unit_rows, second.unit_rows)
     assert first.preview == second.preview
     assert first.summary["lines"] == 4
     assert first.summary["transcription_space_boundaries"] == 8
