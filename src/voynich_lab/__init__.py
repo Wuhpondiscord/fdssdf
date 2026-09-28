@@ -12,6 +12,7 @@ __all__ = [
     "longrange",
     "scorecard",
     "discriminator",
+    "stratified",
     "replication_targets",
     "published_replication",
     "currier",

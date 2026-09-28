@@ -29,8 +29,11 @@ from voynich_lab.published_replication import automatic_replication_metrics, uni
 from voynich_lab.replication_targets import compare_to_targets
 from voynich_lab.scorecard import scorecard_to_rows, run_scorecard
 from voynich_lab.segmentation import cross_fit_bpe_scale_curve, discover_bpe_units
+from voynich_lab.stratified import heterogeneity_control, line_strata, stratified_generator
 from voynich_lab.unigram_segmentation import segmentation_consensus
 from voynich_lab.surrogates import (
+    bind_generator,
+    boundary_markov_surrogate,
     block_shuffle_surrogate,
     iid_glyph_surrogate,
     markov1_surrogate,
@@ -265,11 +268,27 @@ GENERATOR_CHOICES = {
     "N1 order-1 Markov (layout fixed)": markov1_surrogate,
     "N2 order-3 Markov with backoff": lambda t, seed: markov_k_surrogate(t, order=3, seed=seed),
     "N3 order-5 Markov with backoff": lambda t, seed: markov_k_surrogate(t, order=5, seed=seed),
+    "N2b boundary-aware order-2 n-gram (spaces are symbols)": bind_generator(boundary_markov_surrogate, order=2),
+    "N3b boundary-aware order-3 n-gram (spaces are symbols)": bind_generator(boundary_markov_surrogate, order=3),
     "N4 glyph-block shuffle, size 3": lambda t, seed: block_shuffle_surrogate(t, block_size=3, seed=seed),
     "N5 conventional-token shuffle": token_shuffle_surrogate,
     "N6 position-conditioned Markov": lambda t, seed: position_conditioned_markov_surrogate(t, n_bins=10, seed=seed),
     SELFCITATION_ADAPTER_NAME: selfcitation_reference_matched,
 }
+
+
+STRATIFY_CHOICES = ["none (fit globally)", "per quire ($Q)", "per Currier language ($L)"]
+
+
+def resolve_generator(generator_name: str, stratify: str, raw_text: str):
+    """Return the selected generator, optionally fit separately inside each quire / Currier language (N7)."""
+    base = GENERATOR_CHOICES[generator_name]
+    if not stratify or stratify.startswith("none"):
+        return base
+    if not raw_text or not is_ivtff(raw_text):
+        raise gr.Error("Stratified generators need IVTFF input: quire ($Q) and Currier ($L) labels come from the page headers.")
+    by = "quire" if stratify.startswith("per quire") else "currier"
+    return stratified_generator(line_strata(parse_ivtff(raw_text), by), base)
 
 
 def run_longrange_ui(text: str, max_lag: int, permutations: int, dfa_min: int, dfa_max: int, dfa_steps: int):
@@ -289,37 +308,69 @@ def run_longrange_ui(text: str, max_lag: int, permutations: int, dfa_min: int, d
     )
 
 
-def run_scorecard_ui(text: str, generator_name: str, n_replicates: int, seed: int):
+def run_scorecard_ui(text: str, generator_name: str, stratify: str, raw_text: str, n_replicates: int, seed: int):
     if not text.strip():
         raise gr.Error("Load a transcription first.")
-    result = run_scorecard(
-        text,
-        GENERATOR_CHOICES[generator_name],
-        n_replicates=int(n_replicates),
-        seed=int(seed),
-    )
+    generator = resolve_generator(generator_name, stratify, raw_text)
+    try:
+        result = run_scorecard(text, generator, n_replicates=int(n_replicates), seed=int(seed))
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
     verdict = (
         f"D∞ = {result.d_infinity:.3f}; worst feature = {result.worst_feature}; "
-        f"global leave-one-replicate-out Monte Carlo p = {result.global_p_value:.4f}. "
+        f"global leave-one-replicate-out Monte Carlo p = {result.global_p_value:.4f} "
+        f"(smallest resolvable p at {result.n_replicates} replicates: {result.min_resolvable_p:.3g}). "
         "Use a preregistered alpha threshold; feature p-values are Holm-adjusted in the table."
     )
+    if result.resolution_note:
+        verdict += "\n" + result.resolution_note
     return pd.DataFrame(scorecard_to_rows(result)), verdict
 
 
-def run_discriminator_ui(text: str, generator_name: str, block_size: int, n_gen_replicates: int, seed: int):
+def run_discriminator_ui(text: str, generator_name: str, stratify: str, raw_text: str, block_size: int, n_gen_replicates: int, seed: int):
     if not text.strip():
         raise gr.Error("Load a transcription first.")
-    result = classifier_two_sample_test(
-        text,
-        GENERATOR_CHOICES[generator_name],
-        block_size=int(block_size),
-        n_generated_replicates=int(n_gen_replicates),
-        seed=int(seed),
-    )
+    generator = resolve_generator(generator_name, stratify, raw_text)
+    try:
+        result = classifier_two_sample_test(
+            text,
+            generator,
+            block_size=int(block_size),
+            n_generated_replicates=int(n_gen_replicates),
+            seed=int(seed),
+        )
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
     return (
         f"Group-aware held-out AUC = {result.held_out_auc:.3f} ± {result.auc_sd:.3f}; "
         f"split interval [{result.auc_ci_low:.3f}, {result.auc_ci_high:.3f}] across {result.n_splits} valid splits. "
         f"{result.n_real_blocks} real blocks vs {result.n_generated_blocks} generated blocks.\n{result.note}"
+    )
+
+
+def run_heterogeneity_ui(text: str, generator_name: str, by: str, raw_text: str, block_size: int, n_gen_replicates: int, seed: int):
+    if not text.strip():
+        raise gr.Error("Load a transcription first.")
+    if not raw_text or not is_ivtff(raw_text):
+        raise gr.Error("The heterogeneity control needs IVTFF input (native $Q / $L page variables).")
+    key = "quire" if by.startswith("per quire") else "currier"
+    try:
+        r = heterogeneity_control(
+            text,
+            line_strata(parse_ivtff(raw_text), key),
+            GENERATOR_CHOICES[generator_name],
+            block_size=int(block_size),
+            n_generated_replicates=int(n_gen_replicates),
+            seed=int(seed),
+        )
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    return (
+        f"Global null:     AUC = {r.auc_global:.3f}  [{r.auc_global_ci[0]:.3f}, {r.auc_global_ci[1]:.3f}]\n"
+        f"Stratified null: AUC = {r.auc_stratified:.3f}  [{r.auc_stratified_ci[0]:.3f}, {r.auc_stratified_ci[1]:.3f}]  "
+        f"({r.n_strata} strata)\n"
+        f"Separability explained by stratum composition (AUC drop): {r.auc_drop:+.3f}\n"
+        f"Stratified 95% split interval includes chance (0.5): {r.stratified_ci_includes_chance}\n{r.note}"
     )
 
 
@@ -539,13 +590,18 @@ with gr.Blocks(title=APP_TITLE) as demo:
     with gr.Tab("7 · Adversarial validation"):
         gr.Markdown("Layer 1 uses an empirically calibrated global max-statistic plus feature-wise Holm correction. Layer 2 uses contiguous group holdouts rather than random neighboring-block splits.")
         gen_choice = gr.Dropdown(list(GENERATOR_CHOICES), value="N1 order-1 Markov (layout fixed)", label="Candidate generator")
+        stratify_choice = gr.Radio(
+            STRATIFY_CHOICES,
+            value=STRATIFY_CHOICES[0],
+            label="N7 stratification (fit the generator separately inside each stratum; needs IVTFF input)",
+        )
         with gr.Row():
             sc_replicates = gr.Slider(20, 500, value=150, step=10, label="Scorecard Monte Carlo replicates")
             sc_seed = gr.Number(value=0, precision=0, label="Seed")
         scorecard_btn = gr.Button("Run layer 1 scorecard", variant="primary")
         scorecard_table = gr.Dataframe(label="Per-feature results", interactive=False)
         scorecard_verdict = gr.Textbox(label="Global score", lines=3, interactive=False)
-        scorecard_btn.click(run_scorecard_ui, [text_state, gen_choice, sc_replicates, sc_seed], [scorecard_table, scorecard_verdict])
+        scorecard_btn.click(run_scorecard_ui, [text_state, gen_choice, stratify_choice, raw_state, sc_replicates, sc_seed], [scorecard_table, scorecard_verdict])
         with gr.Row():
             disc_block = gr.Slider(20, 1000, value=200, step=10, label="Block size")
             disc_reps = gr.Slider(1, 20, value=5, step=1, label="Generator replicates")
@@ -554,8 +610,22 @@ with gr.Blocks(title=APP_TITLE) as demo:
         discriminator_result = gr.Textbox(label="Group-aware held-out AUC", lines=6, interactive=False)
         discriminator_btn.click(
             run_discriminator_ui,
-            [text_state, gen_choice, disc_block, disc_reps, disc_seed],
+            [text_state, gen_choice, stratify_choice, raw_state, disc_block, disc_reps, disc_seed],
             discriminator_result,
+        )
+        gr.Markdown(
+            "**Heterogeneity control.** Global nulls are stationary by construction, so a block classifier can separate "
+            "them from the manuscript simply because the manuscript has sections, hands and Currier strata. This reruns "
+            "layer 2 against the selected generator fit globally and fit within strata, and reports how much of the "
+            "separability was stratum composition."
+        )
+        het_by = gr.Radio(STRATIFY_CHOICES[1:], value=STRATIFY_CHOICES[1], label="Stratify by")
+        het_btn = gr.Button("Run heterogeneity control")
+        het_result = gr.Textbox(label="Global vs stratified null", lines=6, interactive=False)
+        het_btn.click(
+            run_heterogeneity_ui,
+            [text_state, gen_choice, het_by, raw_state, disc_block, disc_reps, disc_seed],
+            het_result,
         )
 
     with gr.Tab("8 · Replication gate"):
