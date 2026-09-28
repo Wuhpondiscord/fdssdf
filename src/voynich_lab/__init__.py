@@ -15,4 +15,5 @@ __all__ = [
     "published_replication",
     "currier",
     "currier_linestart",
+    "currier_report",
 ]
