@@ -1,0 +1,322 @@
+name: Self-citation Slim Morpher Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "src/voynich_lab/selfcitation_canfollow.py"
+      - "src/voynich_lab/selfcitation_morph.py"
+      - "src/voynich_lab/selfcitation_slim.py"
+      - "tests/test_selfcitation_slim.py"
+      - ".github/workflows/selfcitation-slim-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  slim-morpher-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream slim-morpher dependencies
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          root=/tmp/slim/de/voynich/text
+          mkdir -p "$root/morph" "$root/canfollow" "$root/util/random" "$root/util"
+          for file in Glyph.java GlyphGroup.java Substitution.java Constants.java; do
+            curl -fsSL "${base}/de/voynich/text/${file}" -o "$root/${file}"
+          done
+          for file in Converter.java StringUtil.java; do
+            curl -fsSL "${base}/de/voynich/text/util/${file}" -o "$root/util/${file}"
+          done
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o "$root/util/random/I_RandomNumberGenerator.java"
+          for file in I_CanFollow.java CurveLineCanFollow.java; do
+            curl -fsSL "${base}/de/voynich/text/canfollow/${file}" -o "$root/canfollow/${file}"
+          done
+          for file in I_GroupMorpher.java AbstractBaseGroupMorpher.java SlimGroupMorpher.java; do
+            curl -fsSL "${base}/de/voynich/text/morph/${file}" -o "$root/morph/${file}"
+          done
+
+      - name: Add released-config stubs and Java slim parity probe
+        run: |
+          set -euo pipefail
+          root=/tmp/slim/de/voynich/text
+
+          cat > "$root/util/Config.java" <<'JAVA'
+          package de.voynich.text.util;
+          public final class Config {
+              public static boolean useWordFinalSubstitutions = true;
+              public static int methodReuseLastProbability = 10;
+          }
+          JAVA
+
+          cat > "$root/SelfCitationTextGenerator.java" <<'JAVA'
+          package de.voynich.text;
+          public final class SelfCitationTextGenerator {
+              public enum CURRIER { A, B }
+          }
+          JAVA
+
+          cat > "$root/canfollow/VoynichCanFollow.java" <<'JAVA'
+          package de.voynich.text.canfollow;
+          import de.voynich.text.GlyphGroup;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          public class VoynichCanFollow implements I_CanFollow {
+              public boolean canFollowEachOtherBefore(String a, String b, GlyphGroup g) { return false; }
+              public boolean canFollowEachOtherAfter(String a, String b, GlyphGroup g) { return false; }
+              public boolean canFollowToInitalGlyph(String a, String b, GlyphGroup g) { return false; }
+              public boolean isValid(GlyphGroup g) { return false; }
+              public boolean hasValidStartGlyph(GlyphGroup g) { return false; }
+              public GlyphGroup getGallowVariant(GlyphGroup g, I_RandomNumberGenerator r) { return g; }
+          }
+          JAVA
+
+          cat > "$root/morph/SlimMorphParity.java" <<'JAVA'
+          package de.voynich.text.morph;
+
+          import de.voynich.text.*;
+          import de.voynich.text.canfollow.CurveLineCanFollow;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          import java.util.*;
+
+          public class SlimMorphParity {
+              static final int[] SEEDS = {0, 1, 19, 55, 1234};
+              static final String[] SUB_TOKENS = {
+                  "k","t","p","f","in","iin","iiin","ir","iir","iiir","is","iis",
+                  "il","iil","iiil","im","iim","iiim","om","am","og","ag","ol","or","al","ar",
+                  "e","ee","eee","ch","sh","ckh","cth","cs","ckhh","cthh","ikh","ith","iph","ifh",
+                  "eke","ete","cph","cfh","y","o","n","l","r","g","s","d","a","qo","iiis","z"
+              };
+
+              static class TraceRandom implements I_RandomNumberGenerator {
+                  final Random random;
+                  final List<String> trace = new ArrayList<>();
+                  TraceRandom(long seed) { random = new Random(seed); }
+                  public int rand(int max) {
+                      int value = max == 0 ? 0 : random.nextInt(max);
+                      trace.add(max + "=" + value);
+                      return value;
+                  }
+                  String trace() { return String.join(",", trace); }
+              }
+
+              static SlimGroupMorpher morpher(TraceRandom rng) {
+                  SlimGroupMorpher morpher = new SlimGroupMorpher(
+                      SelfCitationTextGenerator.CURRIER.B,
+                      new CurveLineCanFollow(),
+                      0
+                  );
+                  morpher.setRandomNumberGenerator(rng);
+                  morpher.setProbabilities(20, 30);
+                  return morpher;
+              }
+
+              static GlyphGroup g(String text) {
+                  return new GlyphGroup(text, GlyphGroup.GENERATE_TYPE.INITIAL);
+              }
+
+              static GlyphGroup g(String text, GlyphGroup.GENERATE_TYPE type) {
+                  return new GlyphGroup(text, type);
+              }
+
+              static String render(GlyphGroup group) {
+                  return group.glyphGroup + ":" + group.generateType;
+              }
+
+              static String render(List<GlyphGroup> groups) {
+                  List<String> out = new ArrayList<>();
+                  for (GlyphGroup group : groups) out.add(render(group));
+                  return String.join(",", out);
+              }
+
+              static String formatSubstitutions(List<Substitution> substitutions) {
+                  if (substitutions == null) return "null";
+                  List<String> out = new ArrayList<>();
+                  for (Substitution sub : substitutions) {
+                      out.add(String.join("+", sub.tokens) + ":" + sub.probability);
+                  }
+                  return String.join(";", out);
+              }
+
+              static void dumpTables() {
+                  for (String token : SUB_TOKENS) {
+                      System.out.println("T\tN\t" + token + "\t" + formatSubstitutions(Glyph.similarGlyph(token, false)));
+                      System.out.println("T\tF\t" + token + "\t" + formatSubstitutions(Glyph.similarGlyph(token, true)));
+                  }
+              }
+
+              static void replaceProbe(int seed, String word) {
+                  TraceRandom rng = new TraceRandom(seed);
+                  SlimGroupMorpher morpher = morpher(rng);
+                  GlyphGroup result = morpher.replaceRandomToken(g(word), false);
+                  System.out.println("R\t" + seed + "\t" + word + "\t" + render(result) + "\t" + rng.trace());
+              }
+
+              static void addProbe(int seed, String label, String word, String previous, boolean paragraph, boolean line) {
+                  TraceRandom rng = new TraceRandom(seed);
+                  SlimGroupMorpher morpher = morpher(rng);
+                  GlyphGroup prev = previous == null ? null : g(previous);
+                  GlyphGroup result = morpher.addRandomGlyph(g(word), prev, paragraph, line);
+                  System.out.println("A\t" + label + "\t" + seed + "\t" + render(result) + "\t" + rng.trace());
+              }
+
+              static void gallowProbe(int seed, String label, String word, boolean paragraph, boolean line) {
+                  TraceRandom rng = new TraceRandom(seed);
+                  SlimGroupMorpher morpher = morpher(rng);
+                  GlyphGroup result = morpher.addGallow(g(word), paragraph, line);
+                  System.out.println("G\t" + label + "\t" + seed + "\t" + render(result) + "\t" + rng.trace());
+              }
+
+              static void combineProbe(int seed, String left, String right) {
+                  TraceRandom rng = new TraceRandom(seed);
+                  SlimGroupMorpher morpher = morpher(rng);
+                  GlyphGroup result = morpher.combineGlyphgroups(Arrays.asList(g(left), g(right)));
+                  System.out.println("C\t" + seed + "\t" + left + "+" + right + "\t" + render(result) + "\t" + rng.trace());
+              }
+
+              static void morphProbe(int seed, String label, GlyphGroup first, GlyphGroup second, GlyphGroup previous, boolean paragraph, boolean line) {
+                  TraceRandom rng = new TraceRandom(seed);
+                  SlimGroupMorpher morpher = morpher(rng);
+                  List<GlyphGroup> result = morpher.morphGroup(Arrays.asList(first, second), previous, paragraph, line);
+                  System.out.println("M\t" + label + "\t" + seed + "\t" + render(result) + "\t" + rng.trace());
+              }
+
+              public static void main(String[] args) {
+                  dumpTables();
+
+                  String[] replaceWords = {"daiin", "chedy", "ol", "qotchedy", "ckhedy", "pchal", "dy", "am"};
+                  for (int seed : SEEDS) {
+                      for (String word : replaceWords) replaceProbe(seed, word);
+                      addProbe(seed, "normal-daiin", "daiin", "chedy", false, false);
+                      addProbe(seed, "normal-ol", "ol", null, false, false);
+                      addProbe(seed, "paragraph-chedy", "chedy", "chedy", true, false);
+                      gallowProbe(seed, "normal", "chedy", false, false);
+                      gallowProbe(seed, "paragraph-line", "chedy", true, true);
+                      combineProbe(seed, "chol", "daiin");
+                      combineProbe(seed, "ol", "chedy");
+                      combineProbe(seed, "qotchedy", "pchal");
+                      combineProbe(seed, "chedy", "olal");
+                      morphProbe(seed, "normal", g("chedy"), g("daiin"), g("qotchedy"), false, false);
+                      morphProbe(seed, "paragraph-line", g("chedy"), g("daiin"), null, true, true);
+                      morphProbe(seed, "combined-source", g("chedy", GlyphGroup.GENERATE_TYPE.COMBINE), g("daiin"), g("qotchedy"), false, false);
+                  }
+              }
+          }
+          JAVA
+
+      - name: Compile and run pinned upstream slim probe
+        run: |
+          set -euo pipefail
+          javac $(find /tmp/slim -name '*.java' -print)
+          java -cp /tmp/slim de.voynich.text.morph.SlimMorphParity > /tmp/java_slim.tsv
+          wc -l /tmp/java_slim.tsv
+
+      - name: Run Python slim probe on identical tables and seeded scenarios
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_slim.tsv
+          from voynich_lab.selfcitation import GenerateType, GlyphGroup, JavaRandom
+          from voynich_lab.selfcitation_slim import SlimGroupMorpher, similar_glyph
+
+          SEEDS = (0, 1, 19, 55, 1234)
+          SUB_TOKENS = (
+              "k","t","p","f","in","iin","iiin","ir","iir","iiir","is","iis",
+              "il","iil","iiil","im","iim","iiim","om","am","og","ag","ol","or","al","ar",
+              "e","ee","eee","ch","sh","ckh","cth","cs","ckhh","cthh","ikh","ith","iph","ifh",
+              "eke","ete","cph","cfh","y","o","n","l","r","g","s","d","a","qo","iiis","z",
+          )
+
+          class TraceRandom:
+              def __init__(self, seed):
+                  self.random = JavaRandom(seed)
+                  self.trace_values = []
+              def rand(self, maximum):
+                  value = self.random.rand(maximum)
+                  self.trace_values.append(f"{maximum}={value}")
+                  return value
+              def trace(self):
+                  return ",".join(self.trace_values)
+
+          def morpher(rng):
+              value = SlimGroupMorpher(random_number_generator=rng)
+              value.set_probabilities(20, 30)
+              return value
+
+          def g(text, generate_type=GenerateType.INITIAL):
+              return GlyphGroup(text, generate_type)
+
+          def render(group):
+              return f"{group.glyph_group}:{group.generate_type.value}"
+
+          def render_many(groups):
+              return ",".join(render(group) for group in groups)
+
+          def format_substitutions(substitutions):
+              if substitutions is None:
+                  return "null"
+              return ";".join(f"{'+'.join(sub.tokens)}:{sub.probability}" for sub in substitutions)
+
+          for token in SUB_TOKENS:
+              print(f"T\tN\t{token}\t{format_substitutions(similar_glyph(token, False))}")
+              print(f"T\tF\t{token}\t{format_substitutions(similar_glyph(token, True))}")
+
+          replace_words = ("daiin", "chedy", "ol", "qotchedy", "ckhedy", "pchal", "dy", "am")
+          for seed in SEEDS:
+              for word in replace_words:
+                  rng = TraceRandom(seed)
+                  value = morpher(rng)
+                  result = value.replace_random_token(g(word), False)
+                  print(f"R\t{seed}\t{word}\t{render(result)}\t{rng.trace()}")
+
+              for label, word, previous, paragraph, line in (
+                  ("normal-daiin", "daiin", "chedy", False, False),
+                  ("normal-ol", "ol", None, False, False),
+                  ("paragraph-chedy", "chedy", "chedy", True, False),
+              ):
+                  rng = TraceRandom(seed)
+                  value = morpher(rng)
+                  prev = None if previous is None else g(previous)
+                  result = value.add_random_glyph(g(word), prev, paragraph, line)
+                  print(f"A\t{label}\t{seed}\t{render(result)}\t{rng.trace()}")
+
+              for label, paragraph, line in (("normal", False, False), ("paragraph-line", True, True)):
+                  rng = TraceRandom(seed)
+                  value = morpher(rng)
+                  result = value.add_gallow(g("chedy"), paragraph, line)
+                  print(f"G\t{label}\t{seed}\t{render(result)}\t{rng.trace()}")
+
+              for left, right in (("chol", "daiin"), ("ol", "chedy"), ("qotchedy", "pchal"), ("chedy", "olal")):
+                  rng = TraceRandom(seed)
+                  value = morpher(rng)
+                  result = value.combine_glyphgroups((g(left), g(right)))
+                  print(f"C\t{seed}\t{left}+{right}\t{render(result)}\t{rng.trace()}")
+
+              morph_cases = (
+                  ("normal", g("chedy"), g("daiin"), g("qotchedy"), False, False),
+                  ("paragraph-line", g("chedy"), g("daiin"), None, True, True),
+                  ("combined-source", g("chedy", GenerateType.COMBINE), g("daiin"), g("qotchedy"), False, False),
+              )
+              for label, first, second, previous, paragraph, line in morph_cases:
+                  rng = TraceRandom(seed)
+                  value = morpher(rng)
+                  result = value.morph_group((first, second), previous, paragraph, line)
+                  print(f"M\t{label}\t{seed}\t{render_many(result)}\t{rng.trace()}")
+          PY
+          wc -l /tmp/python_slim.tsv
+
+      - name: Require byte-for-byte slim-morpher and RNG-trace parity
+        run: |
+          set -euo pipefail
+          diff -u /tmp/java_slim.tsv /tmp/python_slim.tsv
+          echo "Python SlimGroupMorpher matches pinned upstream Java tables, outputs, and RNG traces"
