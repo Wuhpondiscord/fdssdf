@@ -12,4 +12,6 @@ __all__ = [
     "scorecard",
     "discriminator",
     "replication_targets",
+    "published_replication",
+    "currier",
 ]
