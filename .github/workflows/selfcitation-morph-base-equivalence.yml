@@ -1,0 +1,334 @@
+name: Self-citation Base Morpher Equivalence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/voynich_lab/selfcitation.py"
+      - "src/voynich_lab/selfcitation_canfollow.py"
+      - "src/voynich_lab/selfcitation_morph.py"
+      - "tests/test_selfcitation_morph.py"
+      - ".github/workflows/selfcitation-morph-base-equivalence.yml"
+  workflow_dispatch:
+
+jobs:
+  base-morpher-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned upstream morpher dependencies
+        run: |
+          set -euo pipefail
+          commit="a6ede2202dd7ad6285ce2c007bf22c2a0e7709b7"
+          base="https://raw.githubusercontent.com/TorstenTimm/SelfCitationTextgenerator/${commit}/source/src/main/java"
+          root=/tmp/morph/de/voynich/text
+          mkdir -p "$root/morph" "$root/canfollow" "$root/util/random" "$root/util"
+          for file in Glyph.java GlyphGroup.java Substitution.java Constants.java; do
+            curl -fsSL "${base}/de/voynich/text/${file}" -o "$root/${file}"
+          done
+          for file in Converter.java StringUtil.java; do
+            curl -fsSL "${base}/de/voynich/text/util/${file}" -o "$root/util/${file}"
+          done
+          curl -fsSL "${base}/de/voynich/text/util/random/I_RandomNumberGenerator.java" -o "$root/util/random/I_RandomNumberGenerator.java"
+          for file in I_CanFollow.java CurveLineCanFollow.java; do
+            curl -fsSL "${base}/de/voynich/text/canfollow/${file}" -o "$root/canfollow/${file}"
+          done
+          for file in I_GroupMorpher.java AbstractBaseGroupMorpher.java; do
+            curl -fsSL "${base}/de/voynich/text/morph/${file}" -o "$root/morph/${file}"
+          done
+
+      - name: Add released-config stubs and Java parity probe
+        run: |
+          set -euo pipefail
+          root=/tmp/morph/de/voynich/text
+
+          cat > "$root/util/Config.java" <<'JAVA'
+          package de.voynich.text.util;
+          public final class Config {
+              public static boolean useWordFinalSubstitutions = true;
+              public static int methodReuseLastProbability = 10;
+          }
+          JAVA
+
+          cat > "$root/SelfCitationTextGenerator.java" <<'JAVA'
+          package de.voynich.text;
+          public final class SelfCitationTextGenerator {
+              public enum CURRIER { A, B }
+          }
+          JAVA
+
+          cat > "$root/canfollow/VoynichCanFollow.java" <<'JAVA'
+          package de.voynich.text.canfollow;
+          import de.voynich.text.GlyphGroup;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+
+          public class VoynichCanFollow implements I_CanFollow {
+              public boolean canFollowEachOtherBefore(String a, String b, GlyphGroup g) { return false; }
+              public boolean canFollowEachOtherAfter(String a, String b, GlyphGroup g) { return false; }
+              public boolean canFollowToInitalGlyph(String a, String b, GlyphGroup g) { return false; }
+              public boolean isValid(GlyphGroup g) { return false; }
+              public boolean hasValidStartGlyph(GlyphGroup g) { return false; }
+              public GlyphGroup getGallowVariant(GlyphGroup g, I_RandomNumberGenerator r) { return g; }
+          }
+          JAVA
+
+          cat > "$root/morph/BaseMorphParity.java" <<'JAVA'
+          package de.voynich.text.morph;
+
+          import de.voynich.text.*;
+          import de.voynich.text.canfollow.CurveLineCanFollow;
+          import de.voynich.text.util.random.I_RandomNumberGenerator;
+          import java.util.*;
+
+          public class BaseMorphParity {
+              static class QueueRandom implements I_RandomNumberGenerator {
+                  final ArrayDeque<Integer> values = new ArrayDeque<>();
+                  final List<String> trace = new ArrayList<>();
+                  QueueRandom(int... input) {
+                      for (int value : input) values.add(value);
+                  }
+                  public int rand(int max) {
+                      if (values.isEmpty()) throw new IllegalStateException("unexpected rand(" + max + ")");
+                      int value = values.removeFirst();
+                      if (max != 0 && (value < 0 || value >= max)) {
+                          throw new IllegalStateException("queued value " + value + " outside rand(" + max + ")");
+                      }
+                      trace.add(max + "=" + value);
+                      return value;
+                  }
+                  String trace() { return String.join(",", trace); }
+              }
+
+              static class ProbeMorpher extends AbstractBaseGroupMorpher {
+                  ProbeMorpher(QueueRandom rng, int errorRate) {
+                      super(SelfCitationTextGenerator.CURRIER.B, new CurveLineCanFollow(), errorRate);
+                      setRandomNumberGenerator(rng);
+                  }
+                  public List<GlyphGroup> morphGroup(List<GlyphGroup> groups, GlyphGroup previous, boolean p, boolean l) {
+                      return new ArrayList<>();
+                  }
+                  GlyphGroup replaceRandomToken(GlyphGroup group, boolean paragraphInitial) { return group; }
+                  protected GlyphGroup removeLineInitalGlyph(GlyphGroup group) { return group; }
+                  protected GlyphGroup addGallow(GlyphGroup group, boolean paragraphInitial, boolean lineInitial) { return group; }
+              }
+
+              static GlyphGroup g(String text) {
+                  return new GlyphGroup(text, GlyphGroup.GENERATE_TYPE.INITIAL);
+              }
+
+              static String joinTokens(List<String> values) {
+                  return String.join(",", values);
+              }
+
+              static String joinGroups(List<GlyphGroup> values) {
+                  List<String> out = new ArrayList<>();
+                  for (GlyphGroup value : values) out.add(value.glyphGroup);
+                  return String.join(",", out);
+              }
+
+              static void probabilityProbe(int add, int combine) {
+                  QueueRandom rng = new QueueRandom();
+                  ProbeMorpher morpher = new ProbeMorpher(rng, 0);
+                  morpher.setProbabilities(add, combine);
+                  System.out.println("P\t" + add + "," + combine + "\t" +
+                      morpher.getAddRemovePropability() + "," +
+                      morpher.getCombineSplitPropability() + "," +
+                      morpher.getReplacePropability());
+              }
+
+              static void gallowProbe(boolean firstLine, int value) {
+                  QueueRandom rng = new QueueRandom(value);
+                  String result = Glyph.randomGallow(firstLine, rng);
+                  System.out.println("G\t" + firstLine + "\t" + value + "\t" + result + "\t" + rng.trace());
+              }
+
+              static void lineInitialProbe(int value) {
+                  QueueRandom rng = new QueueRandom(value);
+                  String result = Glyph.randomLineInitalGlyph(rng);
+                  System.out.println("L\t" + value + "\t" + result + "\t" + rng.trace());
+              }
+
+              public static void main(String[] args) {
+                  probabilityProbe(20, 30);
+                  probabilityProbe(90, 90);
+                  probabilityProbe(70, 50);
+
+                  int[] gallowValues = {34, 35, 49, 50, 89, 90, 99};
+                  for (boolean firstLine : new boolean[] {false, true}) {
+                      for (int value : gallowValues) gallowProbe(firstLine, value);
+                  }
+                  for (int value : new int[] {45, 46, 75, 76, 90, 91, 99}) lineInitialProbe(value);
+
+                  QueueRandom errorAllowedRng = new QueueRandom(5);
+                  ProbeMorpher errorAllowed = new ProbeMorpher(errorAllowedRng, 5);
+                  System.out.println("E\t5\t" + errorAllowed.canFollowEachOtherBefore("b", "b", null) + "\t" + errorAllowedRng.trace());
+                  QueueRandom errorDeniedRng = new QueueRandom(6);
+                  ProbeMorpher errorDenied = new ProbeMorpher(errorDeniedRng, 5);
+                  System.out.println("E\t6\t" + errorDenied.canFollowEachOtherBefore("b", "b", null) + "\t" + errorDeniedRng.trace());
+
+                  QueueRandom lineRng = new QueueRandom(0, 0, 99);
+                  ProbeMorpher lineMorpher = new ProbeMorpher(lineRng, 0);
+                  GlyphGroup lineResult = lineMorpher.addLineInitalGlyph(g("chedy"));
+                  System.out.println("I\t" + lineResult.glyphGroup + "\t" + lineRng.trace());
+
+                  QueueRandom prefixRng = new QueueRandom(39, 1);
+                  ProbeMorpher prefixMorpher = new ProbeMorpher(prefixRng, 0);
+                  System.out.println("C\tprefix\t" + joinTokens(prefixMorpher.chooseSubgroups(g("qotchedy"))) + "\t" + prefixRng.trace());
+                  QueueRandom dropRng = new QueueRandom(40);
+                  ProbeMorpher dropMorpher = new ProbeMorpher(dropRng, 0);
+                  System.out.println("C\tdrop\t" + joinTokens(dropMorpher.chooseSubgroups(g("qotchedy"))) + "\t" + dropRng.trace());
+                  QueueRandom ligRng = new QueueRandom(60);
+                  ProbeMorpher ligMorpher = new ProbeMorpher(ligRng, 0);
+                  System.out.println("C\tlig\t" + joinTokens(ligMorpher.chooseSubgroups(g("olal"))) + "\t" + ligRng.trace());
+
+                  QueueRandom splitRng = new QueueRandom();
+                  ProbeMorpher splitMorpher = new ProbeMorpher(splitRng, 0);
+                  GlyphGroup splitSource = g("olal");
+                  int splitPos = splitMorpher.calcSplitPosition(splitSource);
+                  List<GlyphGroup> splitGroups = splitMorpher.splitGlyphgroup(splitSource);
+                  System.out.println("S\t" + splitPos + "\t" + joinGroups(splitGroups) + "\t" + splitRng.trace());
+
+                  QueueRandom deleteRng = new QueueRandom(0);
+                  ProbeMorpher deleteMorpher = new ProbeMorpher(deleteRng, 0);
+                  GlyphGroup deleted = deleteMorpher.tryToDeletePrefix(g("okedy"));
+                  System.out.println("D\t" + deleted.glyphGroup + "\t" + deleted.generateType + "\t" + deleteRng.trace());
+
+                  QueueRandom replaceNormalRng = new QueueRandom(0, 35);
+                  ProbeMorpher replaceNormal = new ProbeMorpher(replaceNormalRng, 0);
+                  GlyphGroup normal = replaceNormal.replaceFirstLineGallows(g("pchalcfh"));
+                  System.out.println("R\tnormal\t" + normal.glyphGroup + "\t" + replaceNormalRng.trace());
+
+                  QueueRandom replaceFirstRng = new QueueRandom(50);
+                  ProbeMorpher replaceFirst = new ProbeMorpher(replaceFirstRng, 0);
+                  GlyphGroup first = replaceFirst.replaceWithFirstLineGallows(g("kchedy"));
+                  System.out.println("R\tfirst\t" + first.glyphGroup + "\t" + replaceFirstRng.trace());
+              }
+          }
+          JAVA
+
+      - name: Compile and run pinned upstream base-morpher probe
+        run: |
+          set -euo pipefail
+          javac $(find /tmp/morph -name '*.java' -print)
+          java -cp /tmp/morph de.voynich.text.morph.BaseMorphParity > /tmp/java_morph.tsv
+          cat /tmp/java_morph.tsv
+
+      - name: Run Python base-morpher probe on identical scenarios
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/python_morph.tsv
+          from voynich_lab.selfcitation import GlyphGroup
+          from voynich_lab.selfcitation_morph import (
+              BaseGroupMorpher,
+              random_gallow,
+              random_line_initial_glyph,
+          )
+
+          class QueueRandom:
+              def __init__(self, *values):
+                  self.values = list(values)
+                  self.trace_values = []
+              def rand(self, maximum):
+                  if not self.values:
+                      raise RuntimeError(f"unexpected rand({maximum})")
+                  value = self.values.pop(0)
+                  if maximum != 0 and not 0 <= value < maximum:
+                      raise RuntimeError(f"queued value {value} outside rand({maximum})")
+                  self.trace_values.append(f"{maximum}={value}")
+                  return value
+              def trace(self):
+                  return ",".join(self.trace_values)
+
+          class ProbeMorpher(BaseGroupMorpher):
+              def add_gallow(self, glyph_group, is_paragraph_initial, is_line_initial):
+                  return glyph_group
+              def remove_line_initial_glyph(self, glyph_group):
+                  return glyph_group
+              def replace_random_token(self, glyph_group, is_paragraph_initial):
+                  return glyph_group
+
+          def boolean(value):
+              return str(bool(value)).lower()
+
+          def probability_probe(add, combine):
+              rng = QueueRandom()
+              morpher = ProbeMorpher(random_number_generator=rng)
+              morpher.set_probabilities(add, combine)
+              print(f"P\t{add},{combine}\t{morpher.add_remove_probability},{morpher.combine_split_probability},{morpher.replace_probability}")
+
+          probability_probe(20, 30)
+          probability_probe(90, 90)
+          probability_probe(70, 50)
+
+          for first_line in (False, True):
+              for value in (34, 35, 49, 50, 89, 90, 99):
+                  rng = QueueRandom(value)
+                  result = random_gallow(first_line, rng)
+                  print(f"G\t{boolean(first_line)}\t{value}\t{result}\t{rng.trace()}")
+
+          for value in (45, 46, 75, 76, 90, 91, 99):
+              rng = QueueRandom(value)
+              result = random_line_initial_glyph(rng)
+              print(f"L\t{value}\t{result}\t{rng.trace()}")
+
+          rng = QueueRandom(5)
+          morpher = ProbeMorpher(random_number_generator=rng, method_can_follow_error_rate=5)
+          print(f"E\t5\t{boolean(morpher.can_follow_each_other_before('b', 'b'))}\t{rng.trace()}")
+          rng = QueueRandom(6)
+          morpher = ProbeMorpher(random_number_generator=rng, method_can_follow_error_rate=5)
+          print(f"E\t6\t{boolean(morpher.can_follow_each_other_before('b', 'b'))}\t{rng.trace()}")
+
+          rng = QueueRandom(0, 0, 99)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          result = morpher.add_line_initial_glyph(GlyphGroup("chedy"))
+          print(f"I\t{result.glyph_group}\t{rng.trace()}")
+
+          rng = QueueRandom(39, 1)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          print(f"C\tprefix\t{','.join(morpher.choose_subgroups(GlyphGroup('qotchedy')))}\t{rng.trace()}")
+          rng = QueueRandom(40)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          print(f"C\tdrop\t{','.join(morpher.choose_subgroups(GlyphGroup('qotchedy')))}\t{rng.trace()}")
+          rng = QueueRandom(60)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          print(f"C\tlig\t{','.join(morpher.choose_subgroups(GlyphGroup('olal')))}\t{rng.trace()}")
+
+          rng = QueueRandom()
+          morpher = ProbeMorpher(random_number_generator=rng)
+          source = GlyphGroup("olal")
+          pos = morpher.calc_split_position(source)
+          groups = morpher.split_glyphgroup(source)
+          print(f"S\t{pos}\t{','.join(group.glyph_group for group in groups)}\t{rng.trace()}")
+
+          rng = QueueRandom(0)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          result = morpher.try_to_delete_prefix(GlyphGroup("okedy"))
+          print(f"D\t{result.glyph_group}\t{result.generate_type.value}\t{rng.trace()}")
+
+          rng = QueueRandom(0, 35)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          result = morpher.replace_first_line_gallows(GlyphGroup("pchalcfh"))
+          print(f"R\tnormal\t{result.glyph_group}\t{rng.trace()}")
+
+          rng = QueueRandom(50)
+          morpher = ProbeMorpher(random_number_generator=rng)
+          result = morpher.replace_with_first_line_gallows(GlyphGroup("kchedy"))
+          print(f"R\tfirst\t{result.glyph_group}\t{rng.trace()}")
+          PY
+          cat /tmp/python_morph.tsv
+
+      - name: Require byte-for-byte base-morpher and RNG-trace parity
+        run: |
+          set -euo pipefail
+          diff -u /tmp/java_morph.tsv /tmp/python_morph.tsv
+          echo "Python base morpher primitives match pinned upstream Java across controlled scenarios"
