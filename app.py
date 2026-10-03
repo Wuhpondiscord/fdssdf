@@ -23,9 +23,9 @@ from voynich_lab.transcript_catalog import (
 APP_TITLE = legacy.APP_TITLE
 
 
-def _fan_out_loaded(result):
+def _fan_out_loaded(result, source_label: str):
     raw, analysis, status, preview = result
-    return raw, analysis, status, preview, status, preview
+    return raw, analysis, status, preview, status, preview, source_label
 
 
 def load_builtin_ui(name: str):
@@ -38,20 +38,21 @@ def load_builtin_ui(name: str):
     status = status.replace("pasted text", f"built-in preset '{preset.name}'")
     if preset.is_remote:
         status += " Source is pinned to the project's reproduction commit."
-    return _fan_out_loaded((raw_text, analysis, status, preview))
+    return _fan_out_loaded((raw_text, analysis, status, preview), preset.name)
 
 
 def load_custom_ui(file_path: str | None, pasted: str):
     if not (pasted and pasted.strip()) and not file_path:
         raise gr.Error("Paste a transcription or choose a .txt, .eva, or .ivtff file first.")
-    return _fan_out_loaded(legacy.load_uploaded(file_path, pasted))
+    label = "pasted text" if (pasted and pasted.strip()) else Path(file_path).name
+    return _fan_out_loaded(legacy.load_uploaded(file_path, pasted), label)
 
 
 def preset_info_ui(name: str):
     return preset_description(name)
 
 
-def run_full_pipeline_ui(raw_text: str, analysis_text: str, profile: str, seed: int):
+def run_full_pipeline_ui(raw_text: str, analysis_text: str, profile: str, seed: int, source_label: str):
     if not analysis_text.strip():
         raise gr.Error("Load a transcript before running the full pipeline.")
     try:
@@ -60,6 +61,7 @@ def run_full_pipeline_ui(raw_text: str, analysis_text: str, profile: str, seed: 
             analysis_text,
             profile=str(profile),
             seed=int(seed),
+            source_label=str(source_label or ""),
         )
     except ValueError as exc:
         raise gr.Error(str(exc)) from exc
@@ -169,6 +171,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
     gr.Markdown("---\n## Analysis workspace")
     legacy.demo.render()
 
+    pipeline_source_label = gr.State(DEFAULT_PRESET)
     source_outputs = [
         legacy.raw_state,
         legacy.text_state,
@@ -176,13 +179,14 @@ with gr.Blocks(title=APP_TITLE) as demo:
         source_preview,
         legacy.load_status,
         legacy.analysis_preview,
+        pipeline_source_label,
     ]
     load_builtin.click(load_builtin_ui, preset, source_outputs)
     load_custom.click(load_custom_ui, [upload, pasted], source_outputs)
     preset.change(preset_info_ui, preset, preset_info, queue=False)
     pipeline_btn.click(
         run_full_pipeline_ui,
-        [legacy.raw_state, legacy.text_state, pipeline_profile, pipeline_seed],
+        [legacy.raw_state, legacy.text_state, pipeline_profile, pipeline_seed, pipeline_source_label],
         [pipeline_status, pipeline_stages, pipeline_summary, pipeline_json],
     )
     demo.load(load_builtin_ui, preset, source_outputs, queue=False)

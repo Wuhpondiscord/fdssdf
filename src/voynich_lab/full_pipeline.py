@@ -11,7 +11,7 @@ from .currier_report import build_currier_report
 from .discriminator import classifier_two_sample_test
 from .ivtff import is_ivtff, parse_ivtff
 from .longrange import block_entropy, dfa_fluctuation, lagged_mi_with_shuffle_baseline
-from .metrics import compute_metrics, positional_entropy_by_decile
+from .metrics import compute_metrics, conventional_tokens, glyph_stream, positional_entropy_by_decile
 from .published_replication import automatic_replication_metrics, unit_scale_text_by_quire
 from .replication_targets import compare_to_targets
 from .scorecard import run_scorecard, scorecard_to_rows
@@ -52,6 +52,37 @@ DIAGNOSTIC_FEATURES = (
     "mean_token_length",
     "zipf_loglog_slope",
 )
+
+# The published Rozanova & Temerev / Parisel targets this pipeline reproduces against were fit on
+# roughly 200,000 glyphs / 33,000 conventional tokens (the full ZL3b corpus). Below this many glyphs,
+# the size-sensitive stages (replication_gate, discriminator, heterogeneity_control, and to a lesser
+# extent scorecard) cannot carry evidential weight: there is no amount of Monte Carlo replication that
+# fixes too little underlying text. This threshold is intentionally generous (an order of magnitude
+# below the real corpus) so it only fires for genuinely toy-scale input such as the bundled offline demo.
+MIN_GLYPHS_FOR_RELIABLE_STAGES = 5_000
+
+
+def _corpus_scale(analysis_text: str, source_label: str) -> dict[str, Any]:
+    glyph_count = len(glyph_stream(analysis_text))
+    token_count = len(conventional_tokens(analysis_text))
+    is_demo_scale = glyph_count < MIN_GLYPHS_FOR_RELIABLE_STAGES
+    note = (
+        f"{glyph_count:,} glyphs / {token_count:,} conventional tokens is far below the published "
+        f"reproduction corpus (~200,000 glyphs / ~33,000 tokens). Treat every stage below as a wiring "
+        "smoke test, not a manuscript finding: replication_gate mismatches, null discriminator AUCs, and "
+        "degenerate scorecard z-scores are expected at this scale and do not indicate anything about the "
+        "Voynich Manuscript. Select the full pinned ZL3b transcript before drawing any conclusion."
+        if is_demo_scale
+        else f"{glyph_count:,} glyphs / {token_count:,} conventional tokens."
+    )
+    return {
+        "source_label": source_label or "unspecified",
+        "glyph_count": glyph_count,
+        "conventional_token_count": token_count,
+        "min_glyphs_for_reliable_stages": MIN_GLYPHS_FOR_RELIABLE_STAGES,
+        "is_demo_scale": is_demo_scale,
+        "note": note,
+    }
 
 
 def profile_names() -> list[str]:
@@ -162,6 +193,7 @@ def run_full_pipeline(
     *,
     profile: str = "Standard",
     seed: int = 0,
+    source_label: str = "",
 ) -> dict[str, Any]:
     """Run the main analysis stack in one call while isolating per-stage failures.
 
@@ -169,6 +201,11 @@ def run_full_pipeline(
     optional ZeroGPU probe, generator playgrounds, and Hugging Face sync are not
     part of this pipeline because they are resource/deployment actions rather
     than manuscript analyses.
+
+    ``source_label`` identifies which transcript produced this report (a built-in
+    preset name, "pasted text", or an uploaded filename). It is carried into the
+    report's ``corpus_scale`` field purely so the JSON is self-describing; callers
+    that don't track a label can omit it.
     """
     raw_text = str(raw_text or "")
     analysis_text = str(analysis_text or "")
@@ -183,6 +220,7 @@ def run_full_pipeline(
         "profile": _plain(cfg),
         "seed": int(seed),
         "input_kind": "IVTFF" if raw_text.strip() and is_ivtff(raw_text) else "plain text",
+        "corpus_scale": _corpus_scale(analysis_text, source_label),
         "exclusions": [
             "Optional ZeroGPU probe is not run automatically.",
             "Generator playground output (Naibbe/self-citation/Rugg) is not generated automatically.",
@@ -399,13 +437,24 @@ def pipeline_summary_markdown(report: dict[str, Any]) -> str:
     metrics = report.get("metrics", {}).get("corpus", {})
     score = report.get("scorecard", {}).get("result", {})
     disc = report.get("discriminator", {})
-    lines = [
-        "### Full-pipeline summary",
-        f"- Profile: **{report.get('profile', {}).get('label', '?')}**",
-        f"- Input: **{report.get('input_kind', '?')}**",
-        f"- Stages: **{report.get('completed_stages', 0)} completed**, "
-        f"**{report.get('skipped_stages', 0)} skipped**, **{report.get('error_stages', 0)} errors**",
-    ]
+    scale = report.get("corpus_scale", {})
+    lines = ["### Full-pipeline summary"]
+    if scale.get("is_demo_scale"):
+        lines.append(
+            f"> ⚠️ **Demo-scale input ({scale.get('source_label', 'unspecified')}): "
+            f"{scale.get('glyph_count', '?'):,} glyphs.** {scale.get('note', '')}"
+            if isinstance(scale.get("glyph_count"), int)
+            else f"> ⚠️ **Demo-scale input.** {scale.get('note', '')}"
+        )
+    lines.append(f"- Source: **{scale.get('source_label', 'unspecified')}**")
+    lines.extend(
+        [
+            f"- Profile: **{report.get('profile', {}).get('label', '?')}**",
+            f"- Input: **{report.get('input_kind', '?')}**",
+            f"- Stages: **{report.get('completed_stages', 0)} completed**, "
+            f"**{report.get('skipped_stages', 0)} skipped**, **{report.get('error_stages', 0)} errors**",
+        ]
+    )
     if metrics:
         lines.append(
             f"- Corpus: {metrics.get('glyph_count', '?')} glyphs, "

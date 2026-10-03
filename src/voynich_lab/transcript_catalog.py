@@ -22,7 +22,8 @@ IVTFF_EXAMPLE = """#=IVTFF Eva- 2.0
 <f1r.2,@P0;U> shory.cth[e:o]res.y.k[a:o]l
 <f1r.3,@P0;U> qokedy.qokeedy
 <f2r> <! $Q=B $P=A $I=T $L=B $H=2 >
-<f2r.1,@P0;U> chedy.qokeedy.daiin
+<f2r.1,@P0;U> chedy.qokeedy.daiin,shedy
+<f2r.2,@P0;U> otedy.ol.daiin.chedy
 """
 
 # Kept intentionally small so the Space always has an offline IVTFF example even
